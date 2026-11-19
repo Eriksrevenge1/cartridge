@@ -4,7 +4,8 @@
 //      certificate, the App ID and a provisioning profile that holds the device (the Apple ID must be signed in to Xcode: Settings › Accounts);
 //   2. the IPA is unpacked beside itself, gets that profile, and is signed with the placeholder's identity and entitlements (its frameworks first);
 //   3. xcrun devicectl installs the app; an IPA built with --romfs separate then gets its game files with scripts/push_romfs.sh.
-// A free Apple ID's apps run for 7 days and it may not grant Increased Memory Limit: the placeholder is then built without it, and the log says so.
+// A free Apple ID's apps run for 7 days, and only a few at once; a free Personal Team was granted Increased Memory Limit (dm/games/010029B0118E8000/README.md). A team that does not grant
+// an entitlement gets the placeholder without it, and the log says so.
 import AppKit
 import SwiftUI
 
@@ -231,7 +232,7 @@ final class Devices: ObservableObject {
         }
         var (c, out) = build(entitlements)
         if c != 0, !entitlements.isEmpty {
-            say("⚠︎ Your team could not give the app \(entitlements.keys.sorted().joined(separator: ", ")) (a free Apple ID cannot): signing without it. A large game may run out of memory.")
+            say("⚠︎ Your team could not give the app \(entitlements.keys.sorted().joined(separator: ", ")) : signing without it. A large game may run out of memory.")
             (c, out) = build([:])
         }
         guard c == 0, fm.fileExists(atPath: products.appendingPathComponent("embedded.mobileprovision").path) else {
@@ -280,7 +281,7 @@ struct DevicesView: View {
                 }
                 Section("Signing") {
                     TextField("Team ID", text: $devices.team, prompt: Text("10 characters"))
-                    Text("The app is signed with your Apple ID: sign in to Xcode once (Settings › Accounts) and put your team's ID here. A free Apple ID's apps run for 7 days, and it cannot give the bigger games their increased memory limit; a paid developer account can.")
+                    Text("The app is signed with your Apple ID: sign in to Xcode once (Settings › Accounts) and put your team's ID here. A free Apple ID works: its apps stop opening after 7 days (install again; the save stays) and only a few can be installed at once. A paid developer account has neither limit.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
