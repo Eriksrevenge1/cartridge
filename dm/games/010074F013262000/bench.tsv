@@ -1,0 +1,4 @@
+# Benchmark routes for scripts/bench.py
+explore	30:A*20/6,60:Plus~0.2*6/15,61:X~2*6/15	170	20	find the way in from an empty save: A every 6 s, Plus then a held X every 15 s (a movie skip)
+boot	30:A	25	10	the first 35 s from an empty save
+battle	30:A*20/6,60:Plus~0.2*6/15,61:X~2*6/15	88	50	from an empty save (British English, the build default): the title, New Game, the opening movies skipped, into the first battle (auto-attack, the party fighting Agnus soldiers in the burning field)

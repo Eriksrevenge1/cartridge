@@ -13,8 +13,8 @@ engagement-area collision boundary work. All 27,055 base/update shaders compile
 for Mac and iOS. The unsigned IPA is built and its archive checks pass.
 
 iOS runtime testing, DLC gameplay and later-game allocation peaks remain open.
-The supplied four DLC packs are included; their additional shaders have not been
-integrated into the base/update shader census, so DLC rendering is unvalidated.
+The four DLC packs' 7,958 additional shaders are in the shader map
+([Files and shaders](#files-and-shaders)); DLC rendering is unvalidated.
 
 ## Profile and memory
 
@@ -63,6 +63,19 @@ first battle, character/camera movement and Expansion Pass menus ran for
 This extends the evidence for the original layout on Mac. Later-game peaks,
 iPad gameplay and DLC content beyond those menus remain unvalidated.
 
+## Render scale
+
+- Current (2026-11-18, the [`patches.py`](patches.py) stub `render_size`, 2.2.1): the launcher's Render scale goes from 50 to 150 %. Docked, the game draws its scene at
+  1280x720 and its own upscaler takes it to the 1920x1080 output (a battle frame: 487 passes at 1280x720, three at 1920x1080). The renderer's constructor
+  (`main+0xf654e0`) sizes its targets from `mov w1,#1280` / `mov w2,#720`; in play the size comes from a `.rodata` pair (`main+0x14dfd94`) that seven places read through
+  the GOT; and the dynamic resolution (`main+0xf54b40`) trims it, its scale capped at 1.0 (`fminnm` at `main+0xf54d0c`). The stub scales the first, points the GOT
+  entries' relocations at state +0x200 / +0x204 where it writes the scaled pair, and above 1.0 holds the dynamic scale at 1.0. 1.0 leaves all of it as the game has it.
+- Measured (Apple M6, fullscreen on a 4K screen with MetalFX, the 60 FPS cheat, the `battle` route in [`bench.tsv`](bench.tsv)): at 1.5 every scene pass is 1920x1080;
+  the battle ran at 60 fps with the GPU at about 8.6 ms, as at 1.0, while the real-time cutscene before it took 27 ms a frame against 14 at 1.0. Without the hold,
+  the dynamic resolution settled at 1344x760 with the GPU at 9 ms.
+- Resolved, the limit: at 2.0 (2560x1440) every frame logged `present crop out of bounds` and the GPU took 46 ms; the game composes into its 1920x1080 output, so
+  1.5 is the largest scale.
+
 ## Files and shaders
 
 - The merged RomFS is 14.15 GB: 238 WebM movies, nine Wwise PCKs, and `bf3.arh` /
@@ -72,6 +85,13 @@ iPad gameplay and DLC content beyond those menus remain unvalidated.
   308 geometry and 13 compute, with 17,648 variation pairs. `main` supplies 204;
   archive assets supply 26,851. All compile for Mac and iOS with feedback entries
   (chain `7fbca6dd477d`, profile inputs `2342f43192c3`, after integration with main).
+- **Current, the map with the add-on content (2026-11-18):** with the four DLC packs
+  the split finds 35,013 keys (10,404 vertex, 24,266 pixel, 330 geometry, 13
+  compute), 7,958 of them only in `/aoc/` (2,998 in `ma40a.wismda` of DLC 4), and
+  23,000 variation pairs. The 27,055 base/update keys are unchanged; 50 of `main`'s
+  204 rows name an earlier copy of the same GLSLC output as where the key first
+  appears, since the split reads a one-stage GLSLC output by its section header
+  first (`0c83e685`), which the build's table check had refused.
 - **Resolved, extraction:** six boot shader stages live in one standalone SLCT
   at `main+0x14e01c0`, without an HCPS header. Control and code offsets are relative
   to the SLCT itself. Its control sections include assembly text and are aligned

@@ -535,7 +535,7 @@ static void ctx_fill(const thr_t *t, hz_ctx_t *o) {   // holding G, t is stopped
     }
 }
 
-// DM_HITCH_DUMP=<ms>[:<s>] (diagnostic): when no frame has been presented for <ms>, from <s> seconds after the start on, log every guest thread once per stall: priority, core and
+// DM_HITCH_DUMP=<ms>[:<s>[:<poll ms>]] (diagnostic): when no frame has been presented for <ms>, from <s> seconds after the start on (looking every <poll ms>, 2 by default), log every guest thread once per stall: priority, core and
 // mask, what it waits on, its last SVC and call site, and where it is (pc, lr and the frame-pointer chain: up to 8 guest frames, the host frames above them; x0-x2 and x19-x25
 // when it runs guest code), read with the thread suspended for a moment. At most 24 stalls per run. It found Breath of the Wild's job queue poll (patch_nso.py "Spin waits")
 _Atomic uint64_t dm_present_ns;   // nvn_mtl.m present_enqueue (every graphics API): when the last present was made (host monotonic ns)
@@ -550,7 +550,7 @@ typedef struct {   // what one dump line needs, copied under G so that a thread 
 // run: no malloc, no stdio, no dladdr (the suspended thread may hold their locks). The symbols are looked up after every thread runs again
 static void hitch_grab(thr_t *t, hitch_t *h) {
     memset(h, 0, sizeof *h);
-    h->handle = t->handle; h->svc = t->last_svc; h->prio = t->prio; h->core = t->core; h->mask = t->mask; h->wkind = t->wkind & 7; h->waddr = t->waddr; h->wkey = t->wkey;
+    h->handle = t->handle; h->svc = t->last_svc; h->prio = t->prio; h->core = t->core; h->mask = t->mask; h->wkind = t->wkind & 7; h->waddr = t->waddr; h->wkey = h->wkind == 1 && t->waddr ? ld32(t->waddr) : t->wkey;   // a lock wait: the lock word (owner handle | 0x40000000 with waiters)
     h->lr = t->last_lr; h->sleeping = t->sleeping; h->host_work = t->host_work && *t->host_work; h->rs = -1;
     char nb[48]; snprintf(h->name, sizeof h->name, "%s", thr_name(t, nb, sizeof nb));
     if (!t->mport) return;
@@ -594,10 +594,11 @@ static void *hitch_main(void *arg) {
     pthread_setname_np("dm hitch dump");
     const char *e = arg; uint64_t lim = (uint64_t)atoi(e) * 1000000ull, seen = 0, skip = 0; int n = 0;
     if (strchr(e, ':')) skip = (uint64_t)atoi(strchr(e, ':') + 1) * 1000000000ull;
+    long poll = 2000000; { const char *c = strchr(e, ':'); if (c && (c = strchr(c + 1, ':')) && atoi(c + 1) > 0) poll = atoi(c + 1) * 1000000L; }   // a third field: how often it looks, in ms (2 by default)
     extern uint64_t g_t0_ns;
     static hitch_t hs[256];
     while (n < 24) {
-        { struct timespec ts = {0, 2000000}; nanosleep(&ts, 0); }
+        { struct timespec ts = {0, poll}; nanosleep(&ts, 0); }
         uint64_t p = atomic_load(&dm_present_ns), now = now_ns();
         if (!p || p == seen || now - p < lim || now - g_t0_ns < skip) continue;
         seen = p; n++;

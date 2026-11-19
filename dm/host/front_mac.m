@@ -102,6 +102,10 @@ static void screen_match_apply(void) {   // main thread: on a new frame rate, on
     CGDisplayModeRef cur = CGDisplayCopyDisplayMode(id);
     if (!cur) return;
     double hz = mode_hz(cur);
+    // Whether the screen is variable-refresh, read now when this host has not switched it: the flag can be left over from the mode this host gave back. Left over, a player's own
+    // fixed 60 Hz mode (chosen in System Settings, which took the game out of fullscreen and so got the screen's variable mode back) read as the variable mode at 60 Hz; the
+    // fixed candidates then left out every 60 Hz mode and the screen went to fixed 120 Hz on each return to fullscreen (a DELL S2725QC on an Apple M6: three times in one session)
+    if (!g_match_orig) screen_refresh(scr);
     // the current mode is variable-refresh: the screen's own mode as screen_refresh saw it; one this host switched to as it chose it (the screen observer may lag), so a
     // fixed mode is never left for the variable one at a rate it already matches
     int vrr = !g_match_orig ? g_screen_variable_refresh : CGDisplayModeGetIODisplayModeID(cur) == CGDisplayModeGetIODisplayModeID(g_match_orig) ? g_match_orig_vrr : 0;
@@ -1612,6 +1616,19 @@ void front_run(void (*guest)(void)) {
         if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) LOG("front end: Metal performance HUD on (DM_METAL_HUD)");
         v.layer = g_layer; [(DmGameView *)v fitDrawable];
         [win center];
+        // DM_SCREEN=<n or part of a name>: the screen the window opens on (and goes fullscreen on), by its index in NSScreen.screens or a case-insensitive part of its
+        // localizedName. Unset, macOS places it, which for a process another one starts (scripts/bench.py) is the screen the user is working on, not the one asked for
+        if (getenv("DM_SCREEN") && *getenv("DM_SCREEN")) {
+            NSString *want = @(getenv("DM_SCREEN")); NSArray<NSScreen *> *all = NSScreen.screens; NSScreen *pick = nil;
+            NSInteger idx = want.integerValue; BOOL num = [want rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location == NSNotFound;
+            if (num && idx >= 0 && idx < (NSInteger)all.count) pick = all[idx];
+            for (NSScreen *s in all) if (!pick && [s.localizedName rangeOfString:want options:NSCaseInsensitiveSearch].location != NSNotFound) pick = s;
+            if (pick) {
+                NSRect vf = pick.visibleFrame, wf = win.frame;
+                [win setFrameOrigin:NSMakePoint(NSMidX(vf) - wf.size.width / 2, NSMidY(vf) - wf.size.height / 2)];
+                LOG("front end: window on screen '%s' (DM_SCREEN)", pick.localizedName.UTF8String);
+            } else LOG("front end: DM_SCREEN=%s names no screen; macOS places the window", getenv("DM_SCREEN"));
+        }
         [win makeKeyAndOrderFront:nil];
         screen_refresh(win.screen ?: NSScreen.mainScreen);
         g_win = win;

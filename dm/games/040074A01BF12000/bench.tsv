@@ -1,0 +1,4 @@
+# Benchmark routes for scripts/bench.py (from a save that continues into the Banana-Mining Site, SL1: Press A at the title, Continue, a hint, then play)
+dk-run	22:A~0.2,27:A~0.2,32:A~0.2,37:A~0.2,60:RRight~4,66:LUp~3,71:RLeft~4,77:LUp~3,82:RRight~3,87:LDown~3	50	45	the save's continue into the Banana-Mining Site: standing 10 s, then the camera turns right, DK walks, the camera turns left, he walks, turns and walks back
+dk-still	22:A~0.2,27:A~0.2,32:A~0.2,37:A~0.2	50	120	the same continue, standing still for 2 minutes
+dk-smash	22:A~0.2,27:A~0.2,32:A~0.2,37:A~0.2,45:LUp~2,47:Y*8/0.6,52:RRight~2,54:X*8/0.6,59:LLeft~2,61:Y*8/0.6,66:ZR~0.3,67:RLeft~3,70:LUp~4,71:Y*10/0.4,76:X*10/0.4,81:LDown~2,83:B*4/0.8,87:Y*10/0.4	45	50	the same continue, then DK runs, punches (Y, X), rolls and jumps while the camera turns: terrain breaking under load

@@ -123,6 +123,7 @@ def build(gid, patched, control):
             lo, hi, st = (float(x) for x in values.split(':'))
             if var == 'DM_RENDER_SCALE' and keys.get('RENDER_SCALE', '1') != '1':   # a stub that also raises the size: up to its largest scale (the rewriter's RENDER_SCALE, hex as every header value)
                 hi = float(int(keys['RENDER_SCALE'], 16))
+                if 'RENDER_SCALE_PCT' in keys: hi = int(keys['RENDER_SCALE_PCT'], 16) / 100   # a largest scale in hundredths
             s.update(min=lo, max=hi, step=st)
         elif kind == 'toggle':
             if s['default'] not in ('0', '1'): sys.exit(f'settings.tsv:{n}: a toggle defaults to 0 or 1: {s["default"]}')

@@ -336,6 +336,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Check:** `make -C dm/gfx/tests GAME=010015100B514000 t_present_rescue` and `dm/gfx/tests/t_present_rescue` exercise the production wait and retry paths with a controlled clock and a silent link double, without a GPU. They cover foreground grace, backoff saturation, runtime mode changes, and layer release only after run-loop invalidation. The test also runs in CPU graphics CI. `make -C dm/gfx/tests GAME=010015100B514000 check_t_present_rescue` adds a paused real Metal display link on an offscreen Mac layer: rescue invalidates it, then `nextDrawable` succeeds (47 checks, zero failures with Metal validation). `DM_TEST_LINK_STALL=<start seconds>,<duration seconds>` pauses a real window's display link for manual verification.
 - **Not checked:** gameplay during stalled-link recovery or the iPhone; the PR's gameplay runs were headless.
 
+### A display link tried again after a rescue stays silent
+
+- **Symptom:** in fullscreen, a frame of about 135 ms every 3, 6, 12, 24 s, each followed by up to half a second of standing picture; the log repeats `display link: rescue ended, trying pacing mode 1`, then `display link silent for 18x ms (active)` and `display link silent for 5xx ms while active … (rescue #n)`.
+- **Cause:** the link made on each try never called back (on a 4K screen, in fullscreen, after full-screen launches a script made one after another; see the Game Mode entry's caution), and the try was judged as any link: `mtl_present_wait` waited 100 ms for it (`STALL_NS`), then dropped frames for up to 500 ms (`LINK_RESCUE_NS`) before the next rescue. Why the system's link stays silent is **open**.
+- **Fix:** a link tried again is on probation (`nvn_mtl.m` `LINK_PROBE_NS`, 67 ms): with no callback since the try (`g_link_tick_n` unchanged), the wait ends at 67 ms and the rescue resumes at once (`display link tried again and silent for 67 ms … tries failed`); a callback ends the probation. `DM_LINK_PROBE=0` turns it off. `DM_TEST_LINK_STALL` now starts a link made during its stall paused, as one that never calls back.
+- **Found on:** [Donkey Kong Bananza](../../dm/games/040074A01BF12000/README.md#found-on-this-game) on an Apple M6 (2026-11-18), the `dk-smash` route in fullscreen with `DM_TEST_LINK_STALL=40,30`, two runs each: frames over 60 ms from 40 to 75 s 4 and 4 without the probation (135 ms at each try), 1 and 1 with it (the stall's own first frame); 3 tries failed in each run with it; frames dropped on screen 145 / 131 against 116 / 115.
+- **Check:** `make -C dm/gfx/tests GAME=0400486024DEC000 check_t_present_rescue`: a try still silent 67 ms later goes back to the rescue at once (107 checks).
+
 ### Long frames a test run makes itself
 
 - **Symptom:** `[longframe]` lines of 40–180 ms with no new pipelines, a short submit and normal GPU time, which read like CPU hitches in the game: single frames of 60–100 ms, or bursts of 5–12 frames, one of 140–180 ms and the rest about 40 ms.
@@ -461,6 +469,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Check:** here (a built-in 120 Hz screen, a multiple of every link rate) a harness drove `front_mac.m` asked for 50 fps: no switch in the window, 120 → 50 Hz in fullscreen, 120 Hz again on leaving it, and 120 Hz after quitting in fullscreen; at 60 fps and with `DM_SCREEN_MATCH=0` nothing switched.
 - **Not checked:** the link's new range after a switch has not run here (Hades windowed and fullscreen paced at 60 as before).
 - **Later:** a variable-refresh screen in fullscreen switches too, to a fixed-rate mode at a multiple of the game's rate, though its own rate is one: [The 60 Hz link at 40 fps in fullscreen on a ProMotion screen](#the-60-hz-link-at-40-fps-in-fullscreen-on-a-promotion-screen).
+
+### A fixed 60 Hz mode read as the variable one
+
+- **Symptom:** a player sets a variable-refresh screen to its fixed 60 Hz mode in System Settings during a fullscreen game, and it switches to 120 Hz again at once; the log says `variable-refresh screen at 60 Hz switched to fixed 120 Hz for 60 fps in fullscreen`, a 60 Hz mode that is not variable.
+- **Cause:** `screen_match_apply` judged the mode by `g_screen_variable_refresh`, which the screen observer and `screen_match_restore` set. Opening System Settings took the game out of fullscreen, the host gave the screen its variable mode back and kept the flag set; the player's fixed 60 Hz mode then read as the variable mode at 60 Hz, the fixed candidates left out every 60 Hz mode, and fixed 120 Hz was taken.
+- **Fix:** with no mode of its own switched, `screen_match_apply` reads the screen's state again (`screen_refresh`) before judging it.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game) on an Apple M6 with a DELL S2725QC (modes 116 variable 48–120 Hz, 117 fixed 120, 119 fixed 60; 2026-11-18): three switches to fixed 120 Hz in one session, each right after the player chose 60 Hz. From the variable mode the fixed 60 Hz mode is still taken, once (`dmhost` with the fix, the `field-run` route in fullscreen).
+- **Not checked:** the System Settings round trip itself with the fix, by hand.
 
 ### macOS Game Mode holds the GPU at its lowest clock
 
