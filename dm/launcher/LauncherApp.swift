@@ -8,7 +8,8 @@ import SwiftUI
 
 @main
 struct LauncherApp: App {
-    @StateObject private var library = Library()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate   // cartridge:// links (Router.swift)
+    @StateObject private var library = Library.shared
     @StateObject private var pad = GamepadNav()
     @StateObject private var builder = Builder()
     @StateObject private var devices = Devices()
@@ -58,7 +59,7 @@ func addFolder(_ library: Library) {
 }
 
 enum Page: String, CaseIterable, Identifiable {
-    case settings = "Settings", mods = "Mods", cheats = "Cheats", controls = "Controls", saves = "Saves"
+    case settings = "Settings", mods = "Mods", cheats = "Cheats", controls = "Controls", saves = "Saves", screenshots = "Screenshots"
     var id: String { rawValue }
 }
 
@@ -150,7 +151,7 @@ struct LibraryView: View {
         .searchable(text: $search, placement: .sidebar, prompt: "Search games")
         .onChange(of: search) { if !search.isEmpty && selected != nil { selection = homeID } }
         .onChange(of: library.games) { if selection != homeID && selected == nil { selection = homeID } }
-        .onAppear { bindPad() }
+        .onAppear { bindPad(); Router.shared.attach(openWindow) }
         .sheet(item: $finder.game) { g in CoverFinderSheet(game: g) }
         .alert(item: $library.lastExit) { e in
             Alert(title: Text(e.game.name), message: Text(e.message),
@@ -201,7 +202,7 @@ struct GameView: View {
                 }
             }
             Picker("", selection: $page) { ForEach(Page.allCases) { Text($0.rawValue).tag($0) } }
-                .pickerStyle(.segmented).labelsHidden().padding(.horizontal).frame(maxWidth: 520).padding(.top, 4)
+                .pickerStyle(.segmented).labelsHidden().padding(.horizontal).frame(maxWidth: 640).padding(.top, 4)
             Divider().padding(.top, 8)
             switch page {
             case .settings: GameSettingsView(game: game)
@@ -209,6 +210,7 @@ struct GameView: View {
             case .cheats: CheatsView(game: game)
             case .controls: ControlsView(game: game)
             case .saves: SavesView(game: game)
+            case .screenshots: ScreenshotsView(game: game)
             }
         }
     }
@@ -457,8 +459,12 @@ func importSave(_ g: Game) {
     } catch { tell("The save was not restored", error.localizedDescription) }
 }
 
-/// View › Console Mode (⇧⌘K)
+/// View › Console Mode (⇧⌘K): opens it, or leaves it when it is open
 struct ConsoleCommand: View {
     @Environment(\.openWindow) private var openWindow
-    var body: some View { Button("Console Mode") { openWindow(id: "console") }.keyboardShortcut("k", modifiers: [.command, .shift]) }
+    @ObservedObject private var router = Router.shared
+    var body: some View {
+        Button(router.consoleOpen ? "Exit Console Mode" : "Console Mode") { router.consoleOpen ? router.leaveConsole() : openWindow(id: "console") }
+            .keyboardShortcut("k", modifiers: [.command, .shift])
+    }
 }

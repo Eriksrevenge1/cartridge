@@ -28,7 +28,11 @@ Each game's page opens with its cover, name, version and play time, and **Rebuil
 
 Changes take effect at the game's next start.
 
-**Console mode** (the toolbar's TV button, View › Console Mode, ⇧⌘K, or a controller's Menu button) shows the library full screen for playing from the couch: a row of game tiles over the chosen game's art, with its name and play time. Left and right (the D-pad, the left stick or the arrow keys) choose a game, A or Return plays it, B or Escape leaves.
+**Console mode** (the toolbar's TV button, View › Console Mode, ⇧⌘K, or a controller's Menu button) shows the library full screen for playing from the couch: a row of game tiles over the chosen game's art, with its name and play time. Left and right (the D-pad, the left stick or the arrow keys) choose a game, A or Return plays it (or brings it back, if it is running), and B, Escape, ⇧⌘K or the **Exit** button leave. A quick tap of **Home** on a controller in a game opens console mode on that game while the game goes on behind it, as the Switch's Home button does; A brings it back.
+
+**Screenshots.** In a game, press **Capture** (Share on an Xbox or PlayStation controller) or ⌘⇧S (Window › Take Screenshot): the frame is saved at the game's own resolution in `~/Library/Application Support/nxnative/<title ID>/Screenshots/`. A game's **Screenshots** tab shows them, newest first. Right-click one to make it the game's cover, copy, share or open it.
+
+**Siri, Spotlight and Shortcuts.** "Play *game* in Cartridge" starts a game, and "Open Cartridge console mode" opens console mode. Both are Shortcuts actions too (**Play Game**, **Open Console Mode**). Links work as well: `cartridge://play?game=<title ID>` and `cartridge://console`.
 
 ## Building games
 

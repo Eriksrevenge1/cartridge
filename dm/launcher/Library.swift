@@ -84,6 +84,7 @@ struct GameExit: Identifiable {
 }
 
 final class Library: ObservableObject {
+    static let shared = Library()   // the app's one library (Siri and links reach it too)
     @Published var folders: [URL] = []
     @Published var games: [Game] = []
     @Published var running: Set<String> = []   // game ids
@@ -121,11 +122,14 @@ final class Library: ObservableObject {
         }
         games = found.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         NX2AppleImport.run(games)
+        CartridgeShortcuts.updateAppShortcutParameters()   // Siri's phrases name the games
     }
 
     /// Starts the game: its own launcher, without its settings window, so this launcher's choices apply as they are saved
     func play(_ g: Game) {
         guard !running.contains(g.id) else { NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).first?.activate(); return }
+        // started from Finder or the Dock (a tap of Home in it opens console mode): bring it forward rather than start it twice
+        if let other = NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).first { other.activate(); return }
         let p = Process()
         p.executableURL = g.executable
         var env = ProcessInfo.processInfo.environment

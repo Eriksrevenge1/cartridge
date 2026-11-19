@@ -11,6 +11,7 @@ what each game reads by itself (docs/frontends.md), so a game started from Finde
 Needs Xcode (the version README names) on a Mac with Apple silicon.
 """
 import argparse
+import json
 import plistlib
 import re
 import shutil
@@ -44,6 +45,25 @@ def sources():   # the launcher's own files, with the settings model and rows th
     return sorted(p for p in (ROOT / 'dm/launcher').glob('*.swift') if p.name != 'icon.swift') + [ROOT / 'dm/ios/Sources/LauncherSettings.swift', ROOT / 'dm/ios/Sources/LauncherRow.swift']
 
 
+# The protocols whose conformances the compiler records for App Intents (Intents.swift): Xcode's list, which the metadata processor reads the values of
+INTENT_PROTOCOLS = ['AppEntity', 'AppEnum', 'AppExtensionConfiguration', 'AppIntent', 'AppIntentsPackage', 'AppShortcutProviding', 'AppShortcutsProvider', 'AnyResolverProviding',
+                    'DynamicOptionsProvider', 'EntityQuery', 'ExtensionPointDefining', 'IntentValueQuery', 'Resolver', 'TransientEntity', 'TransientAppEntity', 'UnionValue',
+                    '_AssistantIntentsProvider', '_GenerativeFunctionExtractable', '_IntentValueRepresentable']
+
+
+def intents_metadata(res, t, consts, sdk, minos):
+    """Metadata.appintents, which makes Siri, Spotlight and Shortcuts see the app's intents: what Xcode's App Intents step writes, from the sources and the compiler's
+    constant values"""
+    t = Path(t)
+    (t / 'sources.txt').write_text(''.join(f'{p}\n' for p in sources()))
+    (t / 'consts.txt').write_text(f'{consts}\n')
+    xcode = re.search(r'Build version (\S+)', run(['xcodebuild', '-version']))
+    toolchain = Path(run(['xcrun', '--find', 'swiftc']).strip()).parents[2]
+    run(['xcrun', 'appintentsmetadataprocessor', '--output', res, '--toolchain-dir', toolchain, '--module-name', EXE, '--sdk-root', sdk,
+         '--xcode-version', xcode.group(1) if xcode else '0', '--platform-family', 'macOS', '--deployment-target', minos, '--target-triple', f'arm64-apple-macos{minos}',
+         '--source-file-list', t / 'sources.txt', '--swift-const-vals-list', t / 'consts.txt', '--force'])
+
+
 def min_os():   # the Mac host's minimum macOS (dm/mac/min_os.mk)
     m = re.search(r'^MACOS_MIN\s*:=\s*(\S+)', (ROOT / 'dm/mac/min_os.mk').read_text(), re.M)
     return m.group(1) if m else '26.6'
@@ -67,9 +87,13 @@ def main():
         (stage / 'Contents/Resources').mkdir()
         icon(stage / 'Contents/Resources', t)
         print(f'build_launcher: compiling {len(sources())} Swift files for macOS {minos}')
-        run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-swift-version', '5', '-parse-as-library',
+        consts = Path(t) / f'{EXE}.swiftconstvalues'
+        (Path(t) / 'protocols.json').write_text(json.dumps(INTENT_PROTOCOLS))
+        run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-wmo', '-swift-version', '5', '-parse-as-library', '-module-name', EXE,
              '-module-cache-path', Path(t) / 'module-cache', '-o', macos / EXE, *sources(),
-             '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'GameController'])
+             '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'GameController', '-framework', 'AppIntents',
+             '-emit-const-values-path', consts, '-Xfrontend', '-const-gather-protocols-file', '-Xfrontend', Path(t) / 'protocols.json'])
+        intents_metadata(stage / 'Contents/Resources', t, consts, sdk, minos)
         commit = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True).stdout.strip()
         with open(stage / 'Contents/Info.plist', 'wb') as f:
             plistlib.dump({
@@ -77,6 +101,7 @@ def main():
                 'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.0', 'CFBundleVersion': '1', 'CFBundleInfoDictionaryVersion': '6.0',
                 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
                 'LSApplicationCategoryType': 'public.app-category.games', 'DMCommit': commit,
+                'CFBundleURLTypes': [{'CFBundleURLName': BUNDLE_ID, 'CFBundleURLSchemes': ['cartridge']}],   # cartridge:// links (dm/launcher/Router.swift)
                 'DMRepo': str(ROOT), 'DMPython': sys.executable,   # where the Build window runs build_ipa_from_nsp.py, and with what (changeable in its settings)
             }, f)
         run(['codesign', '--force', '--sign', '-', stage])   # ad hoc, as the linker signs any arm64 binary: the bundle's seal covers Info.plist too

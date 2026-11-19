@@ -1,6 +1,7 @@
 // Console mode: the library full screen for the couch, driven by a controller or the keyboard. A row of game tiles over the chosen game's art, its name and play time,
 // and the buttons' meanings at the bottom. Left and right (D-pad, stick, arrow keys) choose, A or Return plays, B or Escape leaves. It opens from the toolbar, View ›
-// Console Mode (⌃⌘F) or a controller's Menu button in the library, and while it is open the controller drives it alone (GamepadNav routes to the front handlers).
+// Console Mode (⇧⌘K) or a controller's Menu button in the library, and while it is open the controller drives it alone (GamepadNav routes to the front handlers). It leaves
+// by B, Escape, ⇧⌘K again or its Exit button.
 import AppKit
 import SwiftUI
 
@@ -8,10 +9,26 @@ struct ConsoleView: View {
     @EnvironmentObject var library: Library
     @EnvironmentObject var pad: GamepadNav
     @Environment(\.dismissWindow) private var dismissWindow
+    @ObservedObject private var router = Router.shared
     @State private var index = 0
+    @State private var keys: Any?   // the key monitor: Escape leaves even when no view has the focus
     @FocusState private var focused: Bool
 
-    private var games: [Game] { library.games.sorted { (Stats.shared.of($0).last ?? .distantPast) > (Stats.shared.of($1).last ?? .distantPast) } }
+    /// The running games first (a tap of Home in one opens console mode on it), then the most recently played
+    private var games: [Game] {
+        library.games.sorted {
+            let r0 = isRunning($0), r1 = isRunning($1)
+            return r0 != r1 ? r0 : (Stats.shared.of($0).last ?? .distantPast) > (Stats.shared.of($1).last ?? .distantPast)
+        }
+    }
+    /// Started here, or from Finder or the Dock
+    private func isRunning(_ g: Game) -> Bool { library.running.contains(g.id) || !NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).isEmpty }
+    /// The game a link asked for (cartridge://console?game=…), once
+    private func takeFocus() {
+        guard let tid = router.focus else { return }
+        router.focus = nil
+        if let i = games.firstIndex(where: { $0.titleID == tid }) { index = i }
+    }
     private var current: Game? { games.indices.contains(index) ? games[index] : nil }
 
     var body: some View {
@@ -41,16 +58,28 @@ struct ConsoleView: View {
         .ignoresSafeArea()
         .animation(.easeOut(duration: 0.22), value: index)
         .focusable().focused($focused).focusEffectDisabled()
-        .onKeyPress(.leftArrow) { move(-1); return .handled }
-        .onKeyPress(.rightArrow) { move(1); return .handled }
-        .onKeyPress(.return) { play(); return .handled }
-        .onKeyPress(.escape) { leave(); return .handled }
         .onAppear {
             focused = true
             pad.push(GamepadNav.Route(move: { _ in }, moveX: move, page: { _ in }, play: play, back: leave, menu: leave))
+            takeFocus()
             fullScreen()
+            router.consoleOpen = true; router.leaveConsole = leave
+            keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+                guard e.window?.title == "Console Mode" else { return e }
+                switch e.keyCode {
+                case 53: leave(); return nil                 // Escape
+                case 123: move(-1); return nil               // left
+                case 124: move(1); return nil                // right
+                case 36, 76: play(); return nil              // Return, Enter
+                default: return e
+                }
+            }
         }
-        .onDisappear { pad.pop() }
+        .onChange(of: router.focus) { takeFocus(); NSApp.activate(ignoringOtherApps: true); window?.makeKeyAndOrderFront(nil) }
+        .onDisappear {
+            pad.pop(); router.consoleOpen = false; router.leaveConsole = {}
+            if let keys { NSEvent.removeMonitor(keys) }; keys = nil
+        }
     }
 
     private var topBar: some View {
@@ -60,6 +89,11 @@ struct ConsoleView: View {
             TimelineView(.periodic(from: .now, by: 15)) { t in
                 Text(t.date, style: .time).font(.title3.monospacedDigit()).foregroundStyle(.white.opacity(0.85))
             }
+            Button(action: leave) {
+                Label("Exit", systemImage: "xmark").font(.title3.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 8)
+                    .foregroundStyle(.white).background(.white.opacity(0.15), in: Capsule())
+            }
+            .buttonStyle(.plain).padding(.leading, 20).help("Leave console mode (Esc, B on a controller, or ⇧⌘K)")
         }
     }
 
@@ -73,7 +107,7 @@ struct ConsoleView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white, lineWidth: on ? 5 : 0))
                             .overlay(alignment: .topTrailing) {
-                                if library.running.contains(g.id) {
+                                if isRunning(g) {
                                     Image(systemName: "play.circle.fill").font(.title).foregroundStyle(.white, .green).padding(10)
                                 }
                             }
@@ -99,7 +133,7 @@ struct ConsoleView: View {
                     Text(g.title).font(.system(size: 40, weight: .bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.5)
                     if g.isSwitch2 { Switch2Badge(size: 14) }
                 }
-                Text(library.running.contains(g.id) ? "Playing now" : Stats.describe(Stats.shared.of(g)) ?? "Not played yet")
+                Text(isRunning(g) ? "Playing now" : Stats.describe(Stats.shared.of(g)) ?? "Not played yet")
                     .font(.title3).foregroundStyle(.white.opacity(0.7))
             }
         }
@@ -107,8 +141,8 @@ struct ConsoleView: View {
 
     private var hints: some View {
         HStack(spacing: 36) {
-            hint("a.circle.fill", current.map { library.running.contains($0.id) ? "Resume" : "Play" } ?? "Play")
-            hint("b.circle.fill", "Back")
+            hint("a.circle.fill", current.map { isRunning($0) ? "Resume" : "Play" } ?? "Play")
+            Button(action: leave) { hint("b.circle.fill", "Back (Esc)") }.buttonStyle(.plain)
             hint("arrow.left.and.right.circle.fill", "Choose")
         }
         .font(.title3).foregroundStyle(.white.opacity(0.85))
