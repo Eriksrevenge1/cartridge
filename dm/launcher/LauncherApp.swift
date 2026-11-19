@@ -1,6 +1,7 @@
 // nxnative Launcher: a library of the nxnative Mac apps the player built, with each game's settings, mods, cheats, controls and saves, and Play. Built by scripts/build_launcher.py.
 // It writes only what each app reads by itself (docs/frontends.md): the saved choices in the app's preferences, mods.txt, the cheat files, the controls files and the cloud
-// saves folder, so a game started from Finder or the Dock plays as it does from here. A controller drives the library: up and down pick a game, A plays it, L and R change the page.
+// saves folder, so a game started from Finder or the Dock plays as it does from here. A controller drives the library: up and down pick a game, A plays it, B goes back to all
+// games, L and R change the page, Menu opens console mode (Console.swift).
 import AppKit
 import GameController
 import SwiftUI
@@ -25,7 +26,12 @@ struct LauncherApp: App {
                 Button("Add Folder to Library…") { addFolder(library) }.keyboardShortcut("o")
                 Button("Refresh Library") { library.scan() }.keyboardShortcut("r")
             }
+            CommandGroup(after: .sidebar) { ConsoleCommand() }
         }
+        Window("Console Mode", id: "console") {
+            ConsoleView().environmentObject(library).environmentObject(pad).frame(minWidth: 900, minHeight: 560)
+        }
+        .windowStyle(.hiddenTitleBar)
         Window("Build Games", id: "build") {
             BuildView().environmentObject(builder).frame(minWidth: 820, minHeight: 520)
                 .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder }
@@ -134,6 +140,7 @@ struct LibraryView: View {
                     } label: { Label("Build", systemImage: "hammer") } primaryAction: { openWindow(id: "build") }
                     .help("Build a game (click), or rebuild every game after an nxnative update (hold)")
                 }
+                ToolbarItem { Button { openWindow(id: "console") } label: { Label("Console Mode", systemImage: "tv") }.help("Console mode: the library full screen, for a controller (⇧⌘K)") }
                 ToolbarItem { Button { openWindow(id: "devices") } label: { Label("Install on iPhone or iPad", systemImage: "iphone.and.arrow.forward") } }
                 ToolbarItem { Button { addFolder(library) } label: { Label("Add Folder", systemImage: "folder.badge.plus") } }
                 ToolbarItem { Button { library.scan() } label: { Label("Refresh", systemImage: "arrow.clockwise") } }
@@ -150,16 +157,19 @@ struct LibraryView: View {
     }
 
     private func bindPad() {
-        pad.onMove = { d in
-            let ids = [homeID] + shown.map(\.id)
-            let i = selection.flatMap { ids.firstIndex(of: $0) } ?? 0
-            selection = ids[max(0, min(ids.count - 1, i + d))]
-        }
-        pad.onPage = { d in
-            let all = Page.allCases, i = all.firstIndex(of: page) ?? 0
-            page = all[(i + d + all.count) % all.count]
-        }
-        pad.onPlay = { if let g = selected { library.play(g) } }
+        pad.setBase(GamepadNav.Route(
+            move: { d in
+                let ids = [homeID] + shown.map(\.id)
+                let i = selection.flatMap { ids.firstIndex(of: $0) } ?? 0
+                selection = ids[max(0, min(ids.count - 1, i + d))]
+            },
+            page: { d in
+                let all = Page.allCases, i = all.firstIndex(of: page) ?? 0
+                page = all[(i + d + all.count) % all.count]
+            },
+            play: { if let g = selected { library.play(g) } },
+            back: { selection = homeID },
+            menu: { openWindow(id: "console") }))
     }
 }
 
@@ -173,8 +183,11 @@ struct GameView: View {
     var body: some View {
         VStack(spacing: 0) {
             GameHeader(game: game) {
-                Button("Rebuild") { rebuildGame(game, builder: builder) { openWindow(id: "build") } }
-                    .controlSize(.large).disabled(library.running.contains(game.id))
+                Menu {
+                    Button("Rebuild") { rebuildGame(game, builder: builder) { openWindow(id: "build") } }
+                    Button("Add Update or DLC and Rebuild…") { updateGame(game, builder: builder) { openWindow(id: "build") } }
+                } label: { Text("Rebuild") } primaryAction: { rebuildGame(game, builder: builder) { openWindow(id: "build") } }
+                    .menuStyle(.button).fixedSize().controlSize(.large).disabled(library.running.contains(game.id))
                     .help(builder.rebuildRequest(for: game).map { "Build this game again from \($0.source.path): after a game update or a newer nxnative" }
                           ?? "Build this game again: choose its NSP folder, dump folder or .nup")
                 if library.running.contains(game.id) {
@@ -248,6 +261,15 @@ struct SavesView: View {
                 }
                 Text("The save is synced at each start and after the game ends.").font(.footnote).foregroundStyle(.secondary)
             }
+            Section("Save") {
+                HStack {
+                    Button("Back Up Save…") { exportSave(game) }
+                        .disabled(!FileManager.default.fileExists(atPath: game.saveFolder.path))
+                    Button("Restore Save…") { importSave(game) }
+                        .disabled(library.running.contains(game.id))
+                }
+                Text("A backup is a .zip of the save. Restoring keeps the current save first, in the game's save-backups folder.").font(.footnote).foregroundStyle(.secondary)
+            }
             Section("Files") {
                 Button("Open Save Folder") { open(game.saveFolder) }
                 Button("Open Game Folder") { open(game.support) }
@@ -294,13 +316,25 @@ struct FoldersView: View {
     }
 }
 
-/// A controller in the library (GameController): the D-pad or the left stick moves through the games, A plays, L and R change the page. Only while this app is active:
-/// the game, another app, reads its controllers itself
+/// A controller in the launcher (GameController): the D-pad or the left stick moves, A plays, B goes back, L and R change the page, Menu opens console mode. Only while this
+/// app is active: the game, another app, reads its controllers itself. The front route gets the presses: the library's, or console mode's while it is open
 final class GamepadNav: ObservableObject {
-    var onMove: ((Int) -> Void)?
-    var onPage: ((Int) -> Void)?
-    var onPlay: (() -> Void)?
-    private var stickLatch: [ObjectIdentifier: Int] = [:]
+    struct Route {
+        var move: (Int) -> Void = { _ in }
+        var moveX: (Int) -> Void = { _ in }
+        var page: (Int) -> Void = { _ in }
+        var play: () -> Void = {}
+        var back: () -> Void = {}
+        var menu: () -> Void = {}
+    }
+    private var routes: [Route] = []
+    private var base = Route()
+    private var front: Route { routes.last ?? base }
+    private var stickY: [ObjectIdentifier: Int] = [:], stickX: [ObjectIdentifier: Int] = [:]
+
+    func setBase(_ r: Route) { base = r }
+    func push(_ r: Route) { routes.append(r) }
+    func pop() { if !routes.isEmpty { routes.removeLast() } }
 
     init() {
         GCController.shouldMonitorBackgroundEvents = false
@@ -309,21 +343,31 @@ final class GamepadNav: ObservableObject {
         }
         GCController.controllers().forEach(attach)
     }
-    private func act(_ f: () -> Void) { if NSApp.isActive { f() } }
+    private func act(_ f: @escaping (Route) -> Void) { DispatchQueue.main.async { if NSApp.isActive { f(self.front) } } }
+    private func press(_ b: GCControllerButtonInput, _ f: @escaping (Route) -> Void) {
+        b.pressedChangedHandler = { [weak self] _, _, p in if p { self?.act(f) } }
+    }
     private func attach(_ c: GCController) {
         guard let g = c.extendedGamepad else { return }
-        g.dpad.up.pressedChangedHandler = { [weak self] _, _, p in if p { self?.act { self?.onMove?(-1) } } }
-        g.dpad.down.pressedChangedHandler = { [weak self] _, _, p in if p { self?.act { self?.onMove?(1) } } }
-        g.leftShoulder.pressedChangedHandler = { [weak self] _, _, p in if p { self?.act { self?.onPage?(-1) } } }
-        g.rightShoulder.pressedChangedHandler = { [weak self] _, _, p in if p { self?.act { self?.onPage?(1) } } }
-        // A as the host reads it (pad_apple.h): the right face button, which GameController names buttonB on most pads and buttonA on a Nintendo one (by its label)
+        press(g.dpad.up) { $0.move(-1) }; press(g.dpad.down) { $0.move(1) }
+        press(g.dpad.left) { $0.moveX(-1) }; press(g.dpad.right) { $0.moveX(1) }
+        press(g.leftShoulder) { $0.page(-1) }; press(g.rightShoulder) { $0.page(1) }
+        press(g.buttonMenu) { $0.menu() }
+        // A and B as the host reads them (pad_apple.h): by position, the right and the bottom face buttons, which GameController names buttonB and buttonA on most pads and
+        // buttonA and buttonB on a Nintendo one (by its labels)
         let labelled = c.productCategory == "Switch Pro Controller" || c.productCategory.contains("Joy-Con")
-        (labelled ? g.buttonA : g.buttonB).pressedChangedHandler = { [weak self] _, _, p in if p { self?.act { self?.onPlay?() } } }
+        press(labelled ? g.buttonA : g.buttonB) { $0.play() }
+        press(labelled ? g.buttonB : g.buttonA) { $0.back() }
         let id = ObjectIdentifier(c)
         g.leftThumbstick.yAxis.valueChangedHandler = { [weak self] _, v in
             guard let self else { return }
             let d = v > 0.6 ? -1 : v < -0.6 ? 1 : 0
-            if d != self.stickLatch[id, default: 0] { self.stickLatch[id] = d; if d != 0 { self.act { self.onMove?(d) } } }
+            if d != self.stickY[id, default: 0] { self.stickY[id] = d; if d != 0 { self.act { $0.move(d) } } }
+        }
+        g.leftThumbstick.xAxis.valueChangedHandler = { [weak self] _, v in
+            guard let self else { return }
+            let d = v > 0.6 ? 1 : v < -0.6 ? -1 : 0
+            if d != self.stickX[id, default: 0] { self.stickX[id] = d; if d != 0 { self.act { $0.moveX(d) } } }
         }
     }
 }
@@ -365,4 +409,54 @@ func askKeysIfNeeded(_ reqs: [BuildRequest], builder: Builder) -> Bool {
     guard p.runModal() == .OK, let u = p.url else { return false }
     builder.keys = u.path
     return true
+}
+
+// MARK: save backup and restore
+
+private func ditto(_ args: [String]) -> Bool {
+    let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); p.arguments = args
+    do { try p.run(); p.waitUntilExit(); return p.terminationStatus == 0 } catch { return false }
+}
+private func stamp() -> String { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH.mm.ss"; return f.string(from: Date()) }
+private func tell(_ title: String, _ text: String) { let a = NSAlert(); a.messageText = title; a.informativeText = text; a.runModal() }
+
+/// The save folder as a .zip (ditto, as Finder's Compress makes it), where the player chooses
+func exportSave(_ g: Game) {
+    let p = NSSavePanel(); p.allowedContentTypes = [.zip]; p.nameFieldStringValue = "\(g.title) save \(stamp()).zip"
+    guard p.runModal() == .OK, let u = p.url else { return }
+    if !ditto(["-c", "-k", "--sequesterRsrc", "--keepParent", g.saveFolder.path, u.path]) { tell("The save was not backed up", "ditto could not write \(u.path).") }
+}
+
+/// A save from a backup .zip or a folder: the current one moves to save-backups/<date> first, then the chosen one takes its place
+func importSave(_ g: Game) {
+    let p = NSOpenPanel(); p.canChooseDirectories = true; p.allowedContentTypes = [.zip, .folder]; p.message = "Choose a save backup (.zip) or a save folder for \(g.title)"
+    guard p.runModal() == .OK, let src = p.url else { return }
+    let fm = FileManager.default
+    var from = src
+    var tmp: URL?
+    if src.pathExtension.lowercased() == "zip" {
+        let t = fm.temporaryDirectory.appendingPathComponent("nxnative-save-\(UUID().uuidString)"); tmp = t
+        guard ditto(["-x", "-k", src.path, t.path]) else { tell("The backup could not be opened", src.lastPathComponent); return }
+        let top = (try? fm.contentsOfDirectory(at: t, includingPropertiesForKeys: nil).filter { !$0.lastPathComponent.hasPrefix(".") && $0.lastPathComponent != "__MACOSX" }) ?? []
+        from = top.count == 1 && top[0].hasDirectoryPath ? top[0] : t   // a backup made here holds the save folder itself
+    }
+    defer { if let tmp { try? fm.removeItem(at: tmp) } }
+    let a = NSAlert(); a.messageText = "Restore \(g.title)'s save from \(src.lastPathComponent)?"
+    a.informativeText = "The current save is kept in the save-backups folder."; a.addButton(withTitle: "Restore"); a.addButton(withTitle: "Cancel")
+    guard a.runModal() == .alertFirstButtonReturn else { return }
+    do {
+        if fm.fileExists(atPath: g.saveFolder.path) {
+            let keep = g.support.appendingPathComponent("save-backups/\(stamp())")
+            try fm.createDirectory(at: keep.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.moveItem(at: g.saveFolder, to: keep)
+        }
+        try fm.createDirectory(at: g.support, withIntermediateDirectories: true)
+        try fm.copyItem(at: from, to: g.saveFolder)
+    } catch { tell("The save was not restored", error.localizedDescription) }
+}
+
+/// View › Console Mode (⇧⌘K)
+struct ConsoleCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View { Button("Console Mode") { openWindow(id: "console") }.keyboardShortcut("k", modifiers: [.command, .shift]) }
 }

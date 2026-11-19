@@ -282,6 +282,7 @@ struct BuildView: View {
                         }
                     }
                 }
+                if hasSource && Packages.takes(req.source) { PackagesSection(folder: req.source) }
                 Section("Build") {
                     Picker("For", selection: $req.target) { ForEach(BuildTarget.allCases) { Text($0.label).tag($0) } }
                     Toggle("Also build the other one", isOn: $both)

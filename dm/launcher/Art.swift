@@ -19,8 +19,9 @@ extension Game {
 
 /// A small "Switch 2" label beside a Switch 2 game's name
 struct Switch2Badge: View {
+    var size: CGFloat = 9
     var body: some View {
-        Text("SWITCH 2").font(.system(size: 9, weight: .heavy)).tracking(0.5).padding(.horizontal, 5).padding(.vertical, 2)
+        Text("SWITCH 2").font(.system(size: size, weight: .heavy)).tracking(size / 18).padding(.horizontal, size * 0.55).padding(.vertical, size * 0.22)
             .foregroundStyle(.white).background(Color.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             .accessibilityLabel("Switch 2 game")
     }
@@ -173,6 +174,7 @@ struct GameMenu: View {
     var body: some View {
         Button(library.running.contains(game.id) ? "Show Game" : "Play") { library.play(game) }
         Button("Rebuild") { rebuildGame(game, builder: builder) { openWindow(id: "build") } }.disabled(library.running.contains(game.id))
+        Button("Add Update or DLC…") { updateGame(game, builder: builder) { openWindow(id: "build") } }.disabled(library.running.contains(game.id))
         Divider()
         Button("Choose Cover…") { chooseCover(game) }
         if Covers.shared.hasCustom(game) { Button("Remove Custom Cover") { Covers.shared.setCustom(game, from: nil) } }
