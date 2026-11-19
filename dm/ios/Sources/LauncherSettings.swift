@@ -56,10 +56,11 @@ final class LauncherModel: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(_ settings: [Setting], defaults: UserDefaults = .standard) {
+    // environment: what this start's environment holds; the nxnative Launcher (dm/launcher) passes a game's, with the keys its env files set, and another app's defaults
+    init(_ settings: [Setting], defaults: UserDefaults = .standard, environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.defaults = defaults
         self.settings = settings
-        let env = ProcessInfo.processInfo.environment
+        let env = environment
         fromLaunch = Set((env["DM_ENV_LAUNCH_KEYS"] ?? "").split(separator: " ").map(String.init))
         fixed = fromLaunch.union((env["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
         ignoreSaved = env["DM_SAVED_CHOICES"] == "0"
@@ -116,6 +117,8 @@ final class LauncherModel: ObservableObject {
             setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v)\(s.isDefault(v) ? "" : " (changed)")\n", stderr)
         }
     }
+    // Every choice kept as Play keeps it, without starting anything (a front end that edits a game's settings, dm/launcher)
+    func save() { for s in settings where !fixed.contains(s.env) { store(s, values[s.env] ?? s.def) } }
     private func store(_ s: Setting, _ v: String) {
         if !ignoreSaved { if s.isDefault(v) { defaults.removeObject(forKey: "launcher." + s.env) } else { defaults.set(v, forKey: "launcher." + s.env) } }
     }

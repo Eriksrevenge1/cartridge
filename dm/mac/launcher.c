@@ -146,6 +146,28 @@ static void cloud_saves_folder(void) {
     if (v) CFRelease(v);
 }
 
+// Mods (docs/frontends.md, Mods): <sup>/mods.txt names the mods that are on, one folder of <sup>/mods per line, the first winning where two have the same file; each one's
+// romfs/ folder (or the folder itself when it has none) becomes a DM_ROMFS_OVERLAY folder. An overlay the launch environment or an env file set wins
+static void mods_overlay(const char *sup) {
+    if (getenv("DM_ROMFS_OVERLAY")) return;
+    char p[PATH_MAX], ln[512], *out = NULL; size_t n = 0; struct stat st;
+    snprintf(p, sizeof p, "%s/mods.txt", sup);
+    FILE *f = fopen(p, "r"); if (!f) return;
+    while (fgets(ln, sizeof ln, f)) {
+        char *s = ln; while (*s == ' ' || *s == '\t') s++;
+        char *e = s + strlen(s); while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
+        if (!*s || *s == '#' || strchr(s, '/') || strchr(s, ':') || !strcmp(s, ".") || !strcmp(s, "..")) continue;
+        snprintf(p, sizeof p, "%s/mods/%s/romfs", sup, s);
+        if (stat(p, &st) || !S_ISDIR(st.st_mode)) { snprintf(p, sizeof p, "%s/mods/%s", sup, s); if (stat(p, &st) || !S_ISDIR(st.st_mode)) { fprintf(stderr, "[RED] launcher: mod %s: no folder %s\n", s, p); continue; } }
+        size_t k = strlen(p); char *o = realloc(out, n + k + 2); if (!o) break;
+        out = o; if (n) out[n++] = ':'; memcpy(out + n, p, k + 1); n += k;
+        fprintf(stderr, "launcher: mod %s (%s)\n", s, p);
+    }
+    fclose(f);
+    if (out) setenv("DM_ROMFS_OVERLAY", out, 1);
+    free(out);
+}
+
 // A game of several programs (Super Mario 3D All-Stars): pack_app.py's table of them, with this app's paths filled in (it may move), for oe::ExecuteProgram (DM_PROGRAMS, hle_oe.c)
 static void programs_table(const char *contents, const char *res, const char *sup) {
     char in[PATH_MAX], out[PATH_MAX]; snprintf(in, sizeof in, "%s/dm/programs.tsv", res); snprintf(out, sizeof out, "%s/programs.tsv", sup);
@@ -207,6 +229,9 @@ int main(int argc, char **argv) {
     if (shown == 2) saved_choices();
     cloud_saves_folder();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_TEMP", temp, 0);
+    // The player's controls (dm/host/controls.h): the file every game reads, then this game's own, whose lines win
+    snprintf(p, sizeof p, "%s/Library/Application Support/nxnative/controls.txt:%s/controls.txt", home, getenv("DM_ROOT")); setenv("DM_CONTROLS", p, 0);
+    mods_overlay(getenv("DM_ROOT"));
     snprintf(p, sizeof p, "%s/Library/Application Support/nxnative/system", home); setenv("DM_SYSTEM_DIR", p, 0);   // the player's own console files, for every game
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);
     snprintf(p, sizeof p, "%s/font", dm); setenv("DM_FONT_DIR", p, 0);
