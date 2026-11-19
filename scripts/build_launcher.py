@@ -32,8 +32,14 @@ def run(cmd):
     return r.stdout
 
 
+def icon(res, t):   # the app icon, drawn by dm/launcher/icon.swift
+    iconset = Path(t) / 'AppIcon.iconset'
+    run(['xcrun', 'swift', ROOT / 'dm/launcher/icon.swift', iconset])
+    run(['iconutil', '-c', 'icns', '-o', res / 'AppIcon.icns', iconset])
+
+
 def sources():   # the launcher's own files, with the settings model and rows the games' own settings windows use
-    return sorted((ROOT / 'dm/launcher').glob('*.swift')) + [ROOT / 'dm/ios/Sources/LauncherSettings.swift', ROOT / 'dm/ios/Sources/LauncherRow.swift']
+    return sorted(p for p in (ROOT / 'dm/launcher').glob('*.swift') if p.name != 'icon.swift') + [ROOT / 'dm/ios/Sources/LauncherSettings.swift', ROOT / 'dm/ios/Sources/LauncherRow.swift']
 
 
 def min_os():   # the Mac host's minimum macOS (dm/mac/min_os.mk)
@@ -57,6 +63,7 @@ def main():
         stage = Path(t) / f'{NAME}.app'
         macos = stage / 'Contents/MacOS'; macos.mkdir(parents=True)
         (stage / 'Contents/Resources').mkdir()
+        icon(stage / 'Contents/Resources', t)
         print(f'build_launcher: compiling {len(sources())} Swift files for macOS {minos}')
         run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-swift-version', '5', '-parse-as-library',
              '-module-cache-path', Path(t) / 'module-cache', '-o', macos / 'nxnative-launcher', *sources(),
@@ -64,7 +71,7 @@ def main():
         commit = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True).stdout.strip()
         with open(stage / 'Contents/Info.plist', 'wb') as f:
             plistlib.dump({
-                'CFBundleName': NAME, 'CFBundleDisplayName': NAME, 'CFBundleIdentifier': BUNDLE_ID, 'CFBundleExecutable': 'nxnative-launcher',
+                'CFBundleName': NAME, 'CFBundleDisplayName': NAME, 'CFBundleIdentifier': BUNDLE_ID, 'CFBundleExecutable': 'nxnative-launcher', 'CFBundleIconFile': 'AppIcon',
                 'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.0', 'CFBundleVersion': '1', 'CFBundleInfoDictionaryVersion': '6.0',
                 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
                 'LSApplicationCategoryType': 'public.app-category.games', 'DMCommit': commit,
