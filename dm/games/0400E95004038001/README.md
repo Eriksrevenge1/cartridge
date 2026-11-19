@@ -66,6 +66,7 @@ about 15 minutes.
 
 ## Found on this game
 
+- [Pointer bases in .bss refused as outside the image](../../../docs/reference/cheats.md#pointer-bases-in-bss-refused-as-outside-the-image): every one of the 2.1.0 cheats' bases.
 - [Monolith containers](../../../docs/reference/shaders.md#monolith-arh1-xbc1-and-hcpsslct-shader-containers):
   an NDSR pack inside an ARD archive's XBC1 stream.
 
