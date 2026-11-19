@@ -213,8 +213,15 @@ closes with A; stand near an enemy to auto-attack and use the left stick to walk
 During a movie, Plus then a held X skips it. The diagnostic watchdog is off when
 `DM_WATCH` is absent; setting it to `0` still enables its default stall threshold.
 
+## Mods and cheats
+
+- Current, cheats: the cheat database's file for 2.2.1 (`82D187FE9EF9BE92`: temporal upsampling and render-scale cheats) reads and writes data only.
+- Current, mods: the game reads its files from `bf3.arh` / `bf3.ard` and each add-on's `bf3_dlc0<n>.arh`; its RomFS has no loose `bdat/`, `chr/` or `menu/`. GameBanana's file mods, made for RoccoDev's [xc3-file-loader](https://github.com/RoccoDev/xc3-file-loader), apply through the host's packing of them into the archives ([Archive members of mod folders](../../../docs/reference/services.md#archive-members-of-mod-folders)). Installed (all off): Ultimate XC3 Rebalance Mod v8.2b, Xbox Button Prompts, Mio - Queen Outfit, Eunie - Panther Outfit. With all four on, 15 members of `bf3.arh` and 8 or 9 of each add-on's archive are replaced (`bdat/dlc.bdat` and the `bdat/gb/game/` tables are in the add-ons' archives too), and the game reaches its auto-save notice showing the Xbox prompts. Not played further.
+- Open: mods with a skyline plugin (Voice Liberator; Super Break Brooch, whose `btl.bdat` would apply alone) are not loaded.
+
 ## Found on this game
 
+- [Archive members of mod folders](../../../docs/reference/services.md#archive-members-of-mod-folders): GameBanana's file mods in `bf3.arh` and the add-ons' archives.
 - [Same-pass feedback through a read-only image](../../../docs/reference/rendering.md#same-pass-feedback-read-through-a-snapshot): lighting shader `15816d836842bfb5` reads its R32Uint zone mask between barriers. Reading the previous frame’s mask made the Colony Sigma cutscene alternate in brightness. Resolved ([#1009](https://github.com/seedds/nxnative/issues/1009)): measured on an Apple M2 in Events Theater chapter 1's Colony Sigma battle, 8 of 10 bursts flipped brightness every frame before (sign-flip fraction 0.83–1.00), at most 0.28 of 11 after. The extra snapshots cost GPU time there: p50 50.4 → 53.0 ms, 18.3 → 17.2 fps. Open: if the shader loads the mask at its own pixel, a tile read (as sampled textures have) would avoid that cost; it needs the translator to record image loads' coordinates.
 - [Monolith ARH1, XBC1 and HCPS/SLCT shader containers](../../../docs/reference/shaders.md#monolith-arh1-xbc1-and-hcpsslct-shader-containers).
 - [Subgroup operations rewritten for a one-lane subgroup](../../../docs/reference/shaders.md#subgroup-operations-rewritten-for-a-one-lane-subgroup).

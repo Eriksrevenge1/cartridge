@@ -19,7 +19,7 @@ Add the folders that hold your games (the toolbar's folder button, or drag a fol
 Each game has five pages:
 
 - **Settings**: the game's settings, as its own settings window shows them ([Settings](settings.md)). A setting an `env.txt` fixes is shown greyed out.
-- **Mods**: add a mod's folder (a Switch SD card's `atmosphere` folder, a folder with `romfs` in it, or the game's files themselves), turn mods on and off, and choose which wins where two change the same file. Mods that change the game's code (`exefs`, IPS patches) are not supported.
+- **Mods**: add a mod's folder (a Switch SD card's `atmosphere` folder, a folder with `romfs` in it, or the game's files themselves), turn mods on and off, and choose which wins where two change the same file. Code patches (`exefs` IPS and pchtxt files for the game's own build) are applied; mods that add a code module (exlaunch, skyline) are not supported.
 - **Cheats**: add an Atmosphère cheat file for the game's version (the page shows its build ID) and turn cheats on and off. Typed values and run-once cheats are set in the game's own Cheats window.
 - **Controls**: for every game or for this game only. Remap a controller's buttons (or swap its sticks), rebind the keyboard, and make the mouse the camera stick: click in the game to capture the pointer, press Escape to give it back. A pair of Joy-Con 2 splits into two players when you hold SL and SR on one of them ([Pairs and singles](playing.md#switch-2-controllers-mac)).
 - **Saves**: the cloud saves folder (one folder can serve every game), the save and log folders, and the game's `env.txt`.

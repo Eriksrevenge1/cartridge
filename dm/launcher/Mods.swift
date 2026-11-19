@@ -1,13 +1,20 @@
 // Mods (docs/frontends.md, Mods): folders in ~/Library/Application Support/nxnative/<title ID>/mods, and mods.txt, the ones that are on, first winning. The game's own launcher
-// (dm/mac/launcher.c) turns the list into DM_ROMFS_OVERLAY at every start. A mod is installed from a folder in any of the usual layouts: the Switch SD card's
-// (atmosphere/contents/<title ID>/romfs), a mod manager's (<mod>/romfs), or the game's files themselves.
+// (dm/mac/launcher.c) turns the list into DM_ROMFS_OVERLAY (romfs/), DM_EXEFS_PATCHES (exefs/: IPS and pchtxt code patches, hle_exefs.c) and DM_AOC_OVERLAY_<index>
+// (aoc/<index>/: files of a DLC) at every start. A mod is installed from a folder in any of the usual layouts: the Switch SD card's (atmosphere/contents/<title ID>/romfs
+// and exefs, and contents/<DLC's ID>/romfs), a mod manager's (<mod>/romfs, <mod>/exefs), or the game's files themselves.
 import AppKit
 import SwiftUI
+
+enum ModCode: Hashable {
+    case none
+    case patches       // IPS / pchtxt files: applied at the game's start
+    case module(String) // a code module (subsdk9, main…): not loaded, and the mod's patches are left out with it (they call into it)
+}
 
 struct Mod: Identifiable, Hashable {
     let name: String
     var on: Bool
-    var hasCode: Bool   // an exefs folder: code patches, which the host does not read
+    var code: ModCode   // what its exefs folder holds
     var id: String { name }
 }
 
@@ -28,10 +35,18 @@ final class ModsModel: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && !$0.hasPrefix("#") }
         let on = list.filter(names.contains)
         let off = names.filter { !on.contains($0) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        mods = (on.map { Mod(name: $0, on: true, hasCode: hasCode($0)) }) + off.map { Mod(name: $0, on: false, hasCode: hasCode($0)) }
+        mods = (on.map { Mod(name: $0, on: true, code: code($0)) }) + off.map { Mod(name: $0, on: false, code: code($0)) }
     }
-    private func hasCode(_ n: String) -> Bool {
-        FileManager.default.fileExists(atPath: game.modsFolder.appendingPathComponent(n).appendingPathComponent("exefs").path)
+    /// What the mod's exefs folder holds, as the host judges it (hle_exefs.c is_module_file)
+    private func code(_ n: String) -> ModCode {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: game.modsFolder.appendingPathComponent(n).appendingPathComponent("exefs").path)) ?? []
+        if let m = names.first(where: Self.isModule) { return .module(m) }
+        return names.contains { $0.lowercased().hasSuffix(".ips") || $0.lowercased().hasSuffix(".pchtxt") } ? .patches : .none
+    }
+    static func isModule(_ n: String) -> Bool {
+        let l = n.lowercased()
+        if ["main", "main.npdm", "sdk", "rtld"].contains(l) { return true }
+        return l.count == 7 && l.hasPrefix("subsdk") && l.last!.isNumber
     }
     func save() {
         let on = mods.filter(\.on).map(\.name)
@@ -54,21 +69,33 @@ final class ModsModel: ObservableObject {
         mods.swapAt(i, i + d); save()
     }
 
-    /// The folder in a mod download that holds the game's files: …/contents/<title ID>/romfs, …/<title ID>/romfs, …/romfs, or the folder itself
-    func romfsRoot(in src: URL) -> (URL, URL?) {
+    /// The folders in a mod download that hold the game's files and code patches: …/contents/<title ID>/romfs and exefs, …/<title ID>/…, …/romfs and …/exefs, or the folder
+    /// itself; and the files of the game's DLCs, …/contents/<DLC's ID>/romfs, by the DLC's index (the low 12 bits of its ID)
+    func romfsRoot(in src: URL) -> (URL, URL?, [Int: URL]) {
         let fm = FileManager.default
         func dir(_ u: URL) -> Bool { var d: ObjCBool = false; return fm.fileExists(atPath: u.path, isDirectory: &d) && d.boolValue }
         let tid = game.titleID
+        var aoc: [Int: URL] = [:]
         for base in [src.appendingPathComponent("atmosphere/contents"), src.appendingPathComponent("contents"), src] {
+            for n in (try? fm.contentsOfDirectory(atPath: base.path)) ?? [] where Self.isDLC(n.uppercased(), of: tid) && dir(base.appendingPathComponent(n).appendingPathComponent("romfs")) {
+                aoc[Int(n.suffix(3), radix: 16)!] = base.appendingPathComponent(n).appendingPathComponent("romfs")
+            }
             for t in [tid, tid.lowercased()] {
                 let r = base.appendingPathComponent(t)
                 if dir(r.appendingPathComponent("romfs")) || dir(r.appendingPathComponent("exefs")) {
-                    return (r.appendingPathComponent("romfs"), dir(r.appendingPathComponent("exefs")) ? r.appendingPathComponent("exefs") : nil)
+                    return (r.appendingPathComponent("romfs"), dir(r.appendingPathComponent("exefs")) ? r.appendingPathComponent("exefs") : nil, aoc)
                 }
             }
+            if !aoc.isEmpty { return (base.appendingPathComponent(tid).appendingPathComponent("romfs"), nil, aoc) }
         }
-        if dir(src.appendingPathComponent("romfs")) { return (src.appendingPathComponent("romfs"), dir(src.appendingPathComponent("exefs")) ? src.appendingPathComponent("exefs") : nil) }
-        return (src, nil)
+        let rom = src.appendingPathComponent("romfs"), exe = src.appendingPathComponent("exefs")
+        if dir(rom) || dir(exe) { return (rom, dir(exe) ? exe : nil, aoc) }
+        return (src, nil, aoc)
+    }
+    /// A DLC of the game: an ID of 16 hex digits whose digits 5 to 12 are the game's (the first byte differs between a Switch 2 Edition and the Switch game whose DLCs it
+    /// reads) and whose low 12 bits, the DLC's index, are not 0
+    static func isDLC(_ n: String, of tid: String) -> Bool {
+        n.count == 16 && n.allSatisfy(\.isHexDigit) && n != tid && Array(n)[4..<12] == Array(tid)[4..<12] && Int(n.suffix(3), radix: 16)! != 0 && n.dropLast(3).last != tid.dropLast(3).last
     }
 
     func install(from src: URL) {
@@ -77,12 +104,17 @@ final class ModsModel: ObservableObject {
         if name == tidFolderName(src) { name = src.deletingLastPathComponent().lastPathComponent }
         var dest = game.modsFolder.appendingPathComponent(name), n = 2
         while fm.fileExists(atPath: dest.path) { dest = game.modsFolder.appendingPathComponent("\(name) \(n)"); n += 1 }
-        let (romfs, exefs) = romfsRoot(in: src)
+        let (romfs, exefs, aoc) = romfsRoot(in: src)
         do {
             try fm.createDirectory(at: dest, withIntermediateDirectories: true)
             if fm.fileExists(atPath: romfs.path) { try fm.copyItem(at: romfs, to: dest.appendingPathComponent("romfs")) }
             if let exefs { try fm.copyItem(at: exefs, to: dest.appendingPathComponent("exefs")) }
-            message = exefs != nil ? "Installed \(dest.lastPathComponent). It also changes the game's code (exefs), which nxnative does not read: only its files are used." : "Installed \(dest.lastPathComponent)."
+            for (i, u) in aoc {
+                try fm.createDirectory(at: dest.appendingPathComponent("aoc"), withIntermediateDirectories: true)
+                try fm.copyItem(at: u, to: dest.appendingPathComponent("aoc/\(i)"))
+            }
+            message = "Installed \(dest.lastPathComponent)."
+            if case .module(let n) = code(dest.lastPathComponent) { message! += " It adds a code module (\(n)), which nxnative does not load: only its files are used." }
         } catch { message = "Could not install the mod: \(error.localizedDescription)" }
         reload()
         if let m = mods.first(where: { $0.name == dest.lastPathComponent }), !m.on { toggle(m) }
@@ -102,7 +134,7 @@ struct ModsView: View {
     var body: some View {
         Form {
             Section {
-                Text("A mod replaces some of the game's files. Mods that are on are read in this order: where two have the same file, the higher one wins. Mods that change the game's code (exefs, IPS patches) are not supported. Changes take effect at the game's next start.")
+                Text("A mod replaces some of the game's files. Mods that are on are read in this order: where two have the same file, the higher one wins. Code patches (IPS, pchtxt) of this version of the game are applied; mods that add a code module (exlaunch, skyline) are not supported. Changes take effect at the game's next start.")
                     .font(.footnote).foregroundStyle(.secondary)
                 HStack {
                     Button("Add Mod Folder…") { pick() }
@@ -121,7 +153,11 @@ struct ModsView: View {
                         Toggle(isOn: Binding(get: { mod.on }, set: { _ in m.toggle(mod) })) {
                             VStack(alignment: .leading) {
                                 Text(mod.name)
-                                if mod.hasCode { Text("Its code changes (exefs) are not used.").font(.footnote).foregroundStyle(.orange) }
+                                switch mod.code {
+                                case .none: EmptyView()
+                                case .patches: Text("Changes the game's code (exefs patches).").font(.footnote).foregroundStyle(.secondary)
+                                case .module(let n): Text("Adds a code module (\(n)), which nxnative does not load: only its files are used.").font(.footnote).foregroundStyle(.orange)
+                                }
                             }
                         }
                         Spacer()

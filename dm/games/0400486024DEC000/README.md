@@ -209,7 +209,15 @@ The prewarm built the 551 specialized bases of that scene in 11 s at the start, 
 
 Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 ms more (GPU per frame 25.09 and 25.24 ms with their corrections, 24.97 and 24.86 ms without, interleaved runs; their compute encoders 0.3 ms faster in the profiled frames). Chain `da29694f3f98` contains the change for every stage; a full shader conversion with it is pending, and so is the target of at least 55 fps at these settings.
 
+## Mods and cheats
+
+- Cheats (current): tomvita's [MyNXCheats release for this build](https://github.com/tomvita/MyNXCheats/releases/tag/0400486024DEC000) (`E0F3CCFAF50065AE.txt`: no damage, refill hearts, 20 hearts, slow descent and moon jump) is plain Atmosphère text. Its code cave (`main+0x3C46A00`…`+0x3C46DA0`, the padding between `TEXT_END` 0x3C461D0 and `RO_OFF` 0x3C47000) and its hook sites touch no word the rewriter changed.
+- Code patches (current): GameBanana's pchtxt and IPS mods for this build apply ([ExeFS patches of mods](../../../docs/reference/rewriter.md#exefs-patches-of-mods)). Fast Travel's code ends at `+0x3C464C7`, below the cheats' cave. Fast Travel and L3 Sprint Toggle write different code into the same seven gaps between functions (`+0xC13D54`…), so only one of them can be on. Mods with an exlaunch module (`exefs/subsdk4`…`9`: HUD of Time, Always-On Rupee Counter, Classic Item Slots, Save Profiles, Hyrule Armory) are not loaded: open.
+- The resource size table (`System/Resource/ResourceSizeTable.Product.111.Nin_Ounce_NVN2.rsizetable.zs`, RESTBL version 1, 160-byte names) is in most mods, and the first mod in `mods.txt` that has it wins. A table holding, for each entry, the largest size any installed mod gives it (and the game's own size otherwise) is right for every combination of those mods, so each installed mod carries that same merged table.
+
 ## Found on this game
+
+- [ExeFS patches of mods](../../../docs/reference/rewriter.md#exefs-patches-of-mods): the pchtxt and IPS mods for this build.
 
 - [A display-link silence read as the game's late frames](../../../docs/reference/frame-rate.md#a-display-link-silence-read-as-the-games-late-frames): the hold stepped to 20 fps when the window was covered and shown again.
 - [Masked color targets store back during depth-only draws](../../../docs/reference/rendering.md#masked-color-targets-store-back-during-depth-only-draws). The depth prepass loaded a 1440×810 RG11B10F color target in eight passes per frame with all channels masked off. The author reported 35.5 MB/frame less attachment-store volume in the first A/B and 29.5 MB/frame less in the follow-up on an M2 MacBook Air. GPU and frame-time results were inconclusive. [PR #2771](https://github.com/seedds/nxnative/pull/2771)

@@ -78,6 +78,10 @@ Each step below stopped the boot before its fix:
 - The NVN2 device values the driver reads from the GPU at run time (17 items: scratch scale factors, L2 size, texture layers and sizes, linear stride alignment, pool page size, …) are still the Switch 1 ones; the constant ones are NVN2's ([The Switch 2's device values](../../../docs/reference/nvn-objects.md#the-switch-2s-device-values)).
 - iOS: longer sessions, current main and other devices remain unvalidated; see the initial [community report](#ios-community-report).
 
+## Mods and cheats
+
+- Current: GameBanana's PlayStation prompt mod replaces five font archives this build has (`Font/*.Nin_Ounce_NVN2.bfarc.zs`). No cheat file names this build (`E25C90C1C1366388`): open.
+
 ## Found on this game
 
 - [The split shader tables differ from a game profile's](../../../docs/reference/packing.md#the-split-shader-tables-differ-from-a-game-profiles): the `main` duplicate-selection mismatch is resolved, 2026-11-17, with the registered shader identities preserved; DLC additions still use a derived profile.
