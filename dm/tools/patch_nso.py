@@ -1804,7 +1804,7 @@ with open(P('fixups.tsv'), 'w') as f:
     if 'qs' in UNITY_FPS: f.write(''.join(f'# UNITY_QS_{k}\t{v:#x}\n' for k, v in zip(('PTR', 'IDX', 'ARR', 'SIZE', 'VSYNC'), UNITY_FPS['qs'])))   # its QualitySettings' vSyncCount (unity_fps.py)
     for n, o in UE_CVARS.items(): f.write(f'# UE_CVAR:{n}\t{o:#x}\n')   # Unreal console variables (ue_cvar.py): the TAutoConsoleVariable registered under each name
     if RENDER_SCALE:   # a render-scale stub reads state +0x10, up to this scale (the loader holds DM_RENDER_SCALE to it; dm/games/settings.py offers the setting up to it)
-        # a whole largest scale, or one in hundredths (Xenoblade Chronicles 3's 1.5): RENDER_SCALE holds it rounded up and RENDER_SCALE_PCT the exact one in percent
+        # a whole largest scale, or one in hundredths (1.5): RENDER_SCALE holds it rounded up and RENDER_SCALE_PCT the exact one in percent
         pct = round(RENDER_SCALE * 100)
         assert isinstance(RENDER_SCALE, (int, float)) and 100 <= pct <= 900 and abs(RENDER_SCALE * 100 - pct) < 1e-6, f'render scale stub: ctx.render_scale is a largest scale from 1 to 9 in hundredths: {RENDER_SCALE!r}'
         f.write(f'# RENDER_SCALE\t{-(-pct // 100)}\n')

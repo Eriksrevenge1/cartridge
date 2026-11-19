@@ -33,7 +33,6 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | `build` → `game` | malloc region 60 GB → 4 GB and its first arena | address space | gap | judgement | 1 | [Xenoblade Chronicles 3](../../dm/games/010074F013262000/README.md) | Monolith's own allocator; its constants span two functions (a multi-function rule). The cause, an iPhone's address space, is a platform limit |
 | `build` → `game` | PhysX completion task release | race | gap | judgement | 1 | [The Legend of Zelda: Link's Awakening](../../dm/games/01006BB00C6F0000/README.md) | a lifetime race in the game's own completion task (its release slot serves this one vtable) |
 | `build` → `game` | render intervals, the forced-interval flag and the render-wait timeout | frame rate | gap | judgement | 1 | [Fire Emblem: Three Houses](../../dm/games/010055D009F78000/README.md) | the game's own tables, flag and timeout |
-| `build` → `game` | render scale: renderer targets, the in-play scene size and the dynamic resolution's cap | rendering | gap | checked: 2.2.1 main: 1080p (1.5) renders every scene pass at 1920x1080 through the first battle at 59.3 fps with the 60 FPS cheat (Apple M6, 2026-11-18); 2.0 rejected (present crop past the output) | 1 | [Xenoblade Chronicles 3](../../dm/games/010074F013262000/README.md) | the game's own size constants and its dynamic-resolution controller, across three functions and two relocations; a function-matched rule would need all of them found together, and 2.2.1 is the one build here |
 | `build` → `game` | task ring push and pop barriers | race | gap | judgement | 1 | [Batman: Arkham Knight](../../dm/games/0100ACD0163D0000/README.md) | a data race in the game's own task ring |
 | `build` → `game` | UE3's GMalloc setup skipped, the host allocator in (hle_uemalloc.c) | address space | gap | judgement | 1 | [Batman: Arkham Knight](../../dm/games/0100ACD0163D0000/README.md) | UE3 inlines the allocator's constructor into the GMalloc setup and has its own vtable layout (25 slots, 32-bit sizes), so the Unreal 4/5 discovery does not apply |
 | `build` → `game` | unused 272-byte slot pool: 4,194,304 → 65,536 slots | address space | gap | judgement | 1 | [Mario + Rabbids® Sparks of Hope](../../dm/games/0100317013770000/README.md) | Sparks of Hope's own init (Kingdom Battle has none) |
@@ -84,7 +83,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Ocarina of Time](#the-legend-of-zelda-ocarina-of-time) | 0 | 0 | 2 | 3 | 0 | `game` ×5 |
 | [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 9 | 0 | 0 | `game` |
-| [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 4 | 0 | 0 | `build` → `game` ×2 |
+| [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Xenoblade Chronicles X: Definitive Edition](#xenoblade-chronicles-x-definitive-edition) | 6 | 0 | 1 | 1 | 0 | `game` ×2 |
 
 ## Games
@@ -613,20 +612,14 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 [Xenoblade Chronicles 3](../../dm/games/010074F013262000/README.md), `010074F013262000`, [patches.py](../../dm/games/010074F013262000/patches.py).
 
 - **`build` → `game`**, address space, gap, judgement: malloc region 60 GB → 4 GB and its first arena. Monolith's own allocator; its constants span two functions (a multi-function rule). The cause, an iPhone's address space, is a platform limit
-- **`build` → `game`**, rendering, gap, checked: 2.2.1 main: 1080p (1.5) renders every scene pass at 1920x1080 through the first battle at 59.3 fps with the 60 FPS cheat (Apple M6, 2026-11-18); 2.0 rejected (present crop past the output): render scale: renderer targets, the in-play scene size and the dynamic resolution's cap. The game's own size constants and its dynamic-resolution controller, across three functions and two relocations; a function-matched rule would need all of them found together, and 2.2.1 is the one build here
 
-- **2.2.1 `main`** `82d187fe…` ([patches.py:18](../../dm/games/010074F013262000/patches.py#L18))
+- **2.2.1 `main`** `82d187fe…` ([patches.py:16](../../dm/games/010074F013262000/patches.py#L16))
   - cut `+0x128e58c`: malloc address region: 60 GB to 4 GB
   - cut `+0x1241870`: first arena bump size, low part: mov x9,#0xffff
   - cut `+0x1241880`: first arena bump size: 512 MB + 128 KB + 64 KB - 1
   - cut `+0x12418d8`: first arena subtraction, sign extension
   - cut `+0x12418dc`: first arena subtraction: -(512 MB + 128 KB)
   - cut `+0x12418e8`: first arena stored capacity: 512 MB + 128 KB
-  - frame step `+0xf54d0c`: dynamic resolution held at full size above render scale 1.0
-  - frame step `+0xf65518`: renderer scene targets and the in-play scene size (state +0x200 / +0x204): 1280x720 times the host render scale
-  - frame step `+0x1480d28`: GOT entry of the in-play scene width (relocation addend): state +0x200, not the .rodata constant
-  - frame step `+0x1480d40`: GOT entry of the in-play scene height (relocation addend): state +0x204, not the .rodata constant
-  - render scale stub (the launcher offers DM_RENDER_SCALE)
 
 ### Xenoblade Chronicles X: Definitive Edition
 

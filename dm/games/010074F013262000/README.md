@@ -65,16 +65,15 @@ iPad gameplay and DLC content beyond those menus remain unvalidated.
 
 ## Render scale
 
-- Current (2026-11-18, the [`patches.py`](patches.py) stub `render_size`, 2.2.1): the launcher's Render scale goes from 50 to 150 %. Docked, the game draws its scene at
-  1280x720 and its own upscaler takes it to the 1920x1080 output (a battle frame: 487 passes at 1280x720, three at 1920x1080). The renderer's constructor
-  (`main+0xf654e0`) sizes its targets from `mov w1,#1280` / `mov w2,#720`; in play the size comes from a `.rodata` pair (`main+0x14dfd94`) that seven places read through
-  the GOT; and the dynamic resolution (`main+0xf54b40`) trims it, its scale capped at 1.0 (`fminnm` at `main+0xf54d0c`). The stub scales the first, points the GOT
-  entries' relocations at state +0x200 / +0x204 where it writes the scaled pair, and above 1.0 holds the dynamic scale at 1.0. 1.0 leaves all of it as the game has it.
-- Measured (Apple M6, fullscreen on a 4K screen with MetalFX, the 60 FPS cheat, the `battle` route in [`bench.tsv`](bench.tsv)): at 1.5 every scene pass is 1920x1080;
-  the battle ran at 60 fps with the GPU at about 8.6 ms, as at 1.0, while the real-time cutscene before it took 27 ms a frame against 14 at 1.0. Without the hold,
-  the dynamic resolution settled at 1344x760 with the GPU at 9 ms.
-- Resolved, the limit: at 2.0 (2560x1440) every frame logged `present crop out of bounds` and the GPU took 46 ms; the game composes into its 1920x1080 output, so
-  1.5 is the largest scale.
+- Resolved, not offered (2026-11-18): a render-scale stub (commit `c4a67a7e`, removed after) drew the scene at up to 1920x1080, but the picture was no sharper.
+  Docked the game draws its scene at 1280x720 and its own upscaler takes it to the 1920x1080 output. Three things set that size: the renderer's constructor
+  (`main+0xf654e0`, `mov w1,#1280` / `mov w2,#720` at `main+0xf65518`), a `.rodata` pair (`main+0x14dfd94`) that seven places read through the GOT
+  (`main+0x1b65938` / `+0x1b65940`, relocations at `main+0x1480d18` / `+0x1480d30`), and the dynamic resolution (`main+0xf54b40`), whose scale is capped at
+  1.0 (`fminnm` at `main+0xf54d0c`) and which settled at 1344x760 at a 1920x1080 size with the GPU at 9 ms of 16.7. With all three changed, every scene pass,
+  the tone mapping and the final pass ran at 1920x1080 (Apple M6, the 60 FPS cheat), but the same frozen moment (the auto-attack tutorial over the first battle)
+  scored 4.80 at 1.0 and 4.66 at 1.5 for edge energy, and looked the same; the real-time cutscene before the battle took 27 ms a frame against 14. The game's
+  anti-aliasing and final pass, made for its 720p-to-1080p step, are the likely reason; changing them is open. At 2560x1440 its present crop reached past the
+  1920x1080 output.
 
 ## Files and shaders
 

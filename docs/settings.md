@@ -35,8 +35,6 @@ Off, the default, keeps the 3D picture at full size. On lets the game lower its 
 
 The size of the 3D picture, from 50 to 100 %. Below 100 % the size is fixed there and the game's own dynamic resolution is off; 100 % keeps the game's own. Lower can be lighter on the GPU but is blurrier; the HUD and text keep their sharpness. Only games the app can scale offer it.
 
-Xenoblade Chronicles 3 goes up to 150 %: docked it draws its scene at 1280x720 for its 1920x1080 output, and 150 % draws it at 1920x1080, the output's own size; above 100 % its dynamic resolution stays at the size you chose. In its first battle 150 % held 60 fps with the 60 FPS cheat on an Apple M6, and a real-time cutscene before it needed about twice the GPU time of 100 % ([its note](../dm/games/010074F013262000/README.md#render-scale)).
-
 Hades II goes up to 300 %: it renders its whole picture, the HUD and text included, at 1280x720 docked and handheld, and above 100 % it renders larger instead of being scaled up: 150 % is 1920x1080, 200 % 2560x1440, 300 % 3840x2160. Sharper on a large screen or window, at more GPU time (about 2.5 times the GPU time at 200 % on an Apple M6); on a small screen the difference is slight. [Its note](../dm/games/0100A00019DE0000/README.md#rendering) has the measurements.
 
 ### Console mode
