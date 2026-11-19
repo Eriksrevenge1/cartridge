@@ -1,6 +1,6 @@
 // Building a game from the launcher: scripts/build_ipa_from_nsp.py with --progress json (docs/frontends.md, Building: the NSP script), one build after the other. A Mac app
 // joins the library when it is done (its folder is added); an IPA is shown in Finder, for the player to sideload. Each build's source is remembered by title ID, so a game in the
-// library can be built again (Rebuild) after a game update or a newer nxnative.
+// library can be built again (Rebuild) after a game update or a newer nxnative; a game the launcher did not build is rebuilt from the source beside its app (rebuildRequest).
 import AppKit
 import SwiftUI
 
@@ -19,6 +19,7 @@ struct BuildRequest: Identifiable, Hashable {
     var romfsSeparate = false // IPA: the game files stay out of the IPA (push_romfs.sh)
     var seenShaders = false   // Mac: only the shaders the playtests used
     var prebake = true        // Mac app: the prewarm list's pipelines made here
+    var fallbackIcon: URL?    // --fallback-icon: a rebuilt app keeps the icon it had when the game has none of its own (a dump, a NUP without one)
 }
 
 final class BuildJob: ObservableObject, Identifiable {
@@ -79,6 +80,32 @@ final class Builder: ObservableObject {
         guard let d = store.dictionary(forKey: "build.sources")?[titleID] as? [String: String], let s = d["source"], let t = BuildTarget(rawValue: d["target"] ?? "") else { return nil }
         return BuildRequest(source: URL(fileURLWithPath: s), target: t, outFolder: d["out"].map { URL(fileURLWithPath: $0) }, language: d["language"] ?? "")
     }
+    /// A library game's Rebuild: its last build's source when the launcher built it, else the source beside its app (the NSP script puts the app beside its NSP folder's
+    /// files, dump folder or .nup by default, so an app packed from a terminal or by another front end finds its own), else nil: the player chooses one
+    func rebuildRequest(for g: Game) -> BuildRequest? {
+        if let r = source(of: g.titleID), FileManager.default.fileExists(atPath: r.source.path) { return r }
+        guard let s = Builder.sourceBeside(g.url.deletingLastPathComponent(), titleID: g.titleID) else { return nil }
+        return BuildRequest(source: s, target: .mac)
+    }
+    /// The game's source in this folder: its .nup (by title ID, or the only one), else the folder itself when it holds NSPs, a dump (base/) or the game's build folder
+    static func sourceBeside(_ dir: URL, titleID: String) -> URL? {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [], tid = titleID.lowercased()
+        let nups = names.filter { $0.lowercased().hasSuffix(".nup") && !$0.hasPrefix("._") }
+        if let n = nups.first(where: { $0.lowercased().contains(tid) }) ?? (nups.count == 1 ? nups.first : nil) { return dir.appendingPathComponent(n) }
+        let game = names.contains { n in
+            let l = n.lowercased()
+            return !l.hasPrefix("._") && ([".nsp", ".xci", ".nsz", ".xcz"].contains { l.hasSuffix($0) } || l == "base" || l == "\(tid)_build")
+        }
+        return game ? dir : nil
+    }
+    /// The app's current icon as a PNG for --fallback-icon, so a rebuild keeps an icon the player gave a game that has none of its own; nil when the app has no icon file
+    static func iconPNG(of g: Game) -> URL? {
+        guard let info = NSDictionary(contentsOf: g.contents.appendingPathComponent("Info.plist")), let name = info["CFBundleIconFile"] as? String else { return nil }
+        let icns = g.contents.appendingPathComponent("Resources").appendingPathComponent(name.hasSuffix(".icns") ? name : name + ".icns")
+        guard let img = NSImage(contentsOf: icns), let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return nil }
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("nxnative-icon-\(g.titleID).png")
+        return (try? png.write(to: out)) != nil ? out : nil
+    }
     private func remember(_ j: BuildJob) {
         guard let tid = j.titleID else { return }
         var all = store.dictionary(forKey: "build.sources") ?? [:]
@@ -97,7 +124,24 @@ final class Builder: ObservableObject {
     private func next() {
         guard !jobs.contains(where: { $0.state == .running }), let j = jobs.first(where: { $0.state == .waiting }) else { return }
         if let why = ready { j.state = .failed(why); next(); return }
+        if let why = Builder.lowSpace(j) { j.state = .failed(why); next(); return }
         start(j)
+    }
+
+    /// Free space on the drive the build writes to (beside the source: its <title ID>_build folder and the app or IPA). A first build of a large game writes about twice its
+    /// files (the extraction, then the app or IPA); a rebuild reuses them. Below 5 GB nothing starts; below 30 GB the build starts with a warning in its lines
+    static func freeSpace(at u: URL) -> Int64? {
+        var d = u; while !FileManager.default.fileExists(atPath: d.path), d.pathComponents.count > 1 { d.deleteLastPathComponent() }
+        return (try? d.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
+            ?? (try? d.resourceValues(forKeys: [.volumeAvailableCapacityKey]))?.volumeAvailableCapacity.map(Int64.init)
+    }
+    static func lowSpace(_ j: BuildJob) -> String? {
+        let dest = j.request.outFolder ?? (j.request.source.pathExtension.lowercased() == "nup" ? j.request.source.deletingLastPathComponent() : j.request.source)
+        guard let free = freeSpace(at: dest) else { return nil }
+        let gb = Double(free) / 1e9
+        if gb < 5 { return String(format: "Only %.1f GB free on the drive of %@: free some space and build again.", gb, dest.path) }
+        if gb < 30 { j.lines.append(String(format: "⚠︎ %.0f GB free on this drive: a first build of a large game can need more.", gb)) }
+        return nil
     }
 
     private func arguments(_ r: BuildRequest) -> [String] {
@@ -107,6 +151,7 @@ final class Builder: ObservableObject {
         if r.target == .ios && r.romfsSeparate { a += ["--romfs", "separate"] }
         if r.target == .mac && r.seenShaders { a.append("--seen-shaders") }
         if r.target == .mac && !r.prebake { a.append("--no-prebake") }
+        if let i = r.fallbackIcon { a += ["--fallback-icon", i.path] }
         return a
     }
 
@@ -244,6 +289,10 @@ struct BuildView: View {
                         Text("Switch 2 games are tested on the Mac only.").font(.footnote).foregroundStyle(.orange)
                     }
                     TextField("Game language (empty: English)", text: $req.language, prompt: Text("en-GB, ja, fr, …"))
+                    if hasSource, let free = Builder.freeSpace(at: req.outFolder ?? req.source) {
+                        LabeledContent("Free space", value: ByteCountFormatter.string(fromByteCount: free, countStyle: .file))
+                            .foregroundStyle(free < 30_000_000_000 ? .orange : .primary)
+                    }
                     LabeledContent("Output folder") {
                         HStack {
                             Text(req.outFolder?.path ?? "Beside the source").lineLimit(1).truncationMode(.middle)

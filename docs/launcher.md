@@ -16,7 +16,9 @@ It puts **nxnative Launcher.app** in `~/Applications` (`--out` names another fol
 
 Add the folders that hold your games (the toolbar's folder button, or drag a folder onto the list). The launcher lists every nxnative Mac app in them, three folder levels deep. A controller works too: up and down pick a game, A plays it, L and R change the page.
 
-Each game has five pages:
+**All Games** shows every game as a tile with its cover: click a tile to open its page, double-click it (or its Play button) to play. Search the sidebar by name or title ID, and sort by recently played, name or play time (the toolbar's sort menu). A game's cover is its own icon, the square key art the game carries, drawn as a tile as on the console; to use another picture, choose **Choose Cover…** on its card or header (right-click), or drop an image on its header. Nothing is downloaded. The launcher counts the time you play each game it starts (a game started from Finder is not counted) and shows it on the tile and the page. Settings › Library sets the appearance: System, Light or Dark.
+
+Each game's page opens with its cover, name, version and play time, and **Rebuild** and **Play**. It has five pages:
 
 - **Settings**: the game's settings, as its own settings window shows them ([Settings](settings.md)). A setting an `env.txt` fixes is shown greyed out.
 - **Mods**: add a mod's folder (a Switch SD card's `atmosphere` folder, a folder with `romfs` in it, or the game's files themselves), turn mods on and off, and choose which wins where two change the same file. Code patches (`exefs` IPS and pchtxt files for the game's own build) are applied; mods that add a code module (exlaunch, skyline) are not supported.
@@ -28,7 +30,7 @@ Changes take effect at the game's next start.
 
 ## Building games
 
-**Build Games** (the hammer) runs the packing script for you. Choose the game's NSP folder, a dump folder or a Switch 2 game's `.nup` file, and build a Mac app, an IPA for iPhone and iPad, or both. NSPs need your `prod.keys`. A finished Mac app joins the library; a finished IPA is ready to install. **Rebuild** on a game's page builds it again from the same files, after a game update or a newer nxnative. If the launcher was moved or nxnative lives elsewhere, set the repository folder and Python in the launcher's Settings › Building.
+**Build Games** (the hammer) runs the packing script for you. Choose the game's NSP folder, a dump folder or a Switch 2 game's `.nup` file, and build a Mac app, an IPA for iPhone and iPad, or both. NSPs need your `prod.keys`. A finished Mac app joins the library; a finished IPA is ready to install. **Rebuild** on every game's page builds it again, after a game update or a newer nxnative: from the files the launcher built it from, else from the files beside the app (its `.nup`, NSPs, dump folder or `<title ID>_build` folder, where the packing script puts the app, so a game packed from a terminal or by another front end has it too), else from the files you choose. An icon you gave a game without one of its own is kept. It is greyed out while the game runs. **Rebuild All Games** (hold the toolbar's hammer, or its arrow) rebuilds every game whose files are known or beside its app, one after the other, after you update nxnative; it names the games it cannot. A build does not start with less than 5 GB free on its drive, and warns below 30 GB; the Build Games window shows the free space. If the launcher was moved or nxnative lives elsewhere, set the repository folder and Python in the launcher's Settings › Building.
 
 ## Installing on an iPhone or iPad
 

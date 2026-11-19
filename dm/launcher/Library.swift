@@ -131,9 +131,11 @@ final class Library: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["DM_LAUNCHER"] = "0"
         p.environment = env
+        let started = Date()
         p.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
                 guard let self else { return }
+                Stats.shared.played(g, from: started)   // before running changes, so the views that redraw read the new time
                 self.running.remove(g.id); self.processes[g.id] = nil
                 let s = proc.terminationReason == .uncaughtSignal ? 128 + proc.terminationStatus : proc.terminationStatus
                 if s != 0 { self.lastExit = GameExit(game: g, status: s) }

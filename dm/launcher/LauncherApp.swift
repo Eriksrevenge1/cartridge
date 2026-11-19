@@ -11,12 +11,14 @@ struct LauncherApp: App {
     @StateObject private var pad = GamepadNav()
     @StateObject private var builder = Builder()
     @StateObject private var devices = Devices()
+    @AppStorage("appearance") private var appearance: Appearance = .system
 
     var body: some Scene {
         WindowGroup("nxnative Launcher") {
             LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder)
                 .frame(minWidth: 860, minHeight: 560)
-                .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder }
+                .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder; appearance.apply() }
+                .onChange(of: appearance) { appearance.apply() }
         }
         .commands {
             CommandGroup(after: .newItem) {
@@ -37,7 +39,7 @@ struct LauncherApp: App {
                 FoldersView().environmentObject(library).tabItem { Label("Library", systemImage: "books.vertical") }
                 BuildSettingsView().environmentObject(builder).tabItem { Label("Building", systemImage: "hammer") }
             }
-            .frame(width: 560, height: 340)
+            .frame(width: 560, height: 400)
         }
     }
 }
@@ -54,61 +56,93 @@ enum Page: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// The sidebar's first row: the home grid, not a game
+let homeID = "home"
+
 struct LibraryView: View {
     @EnvironmentObject var library: Library
     @EnvironmentObject var pad: GamepadNav
+    @EnvironmentObject var builder: Builder
     @Environment(\.openWindow) private var openWindow
-    @State private var selection: String?
+    @State private var selection: String? = homeID
     @State private var page: Page = .settings
+    @State private var search = ""
+    @AppStorage("library.sort") private var sort: LibrarySort = .recent
 
     private var selected: Game? { library.games.first { $0.id == selection } }
+    /// The games the search and the sort leave, in order
+    private var shown: [Game] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        let f = q.isEmpty ? library.games : library.games.filter { $0.name.localizedCaseInsensitiveContains(q) || $0.titleID.localizedCaseInsensitiveContains(q) }
+        switch sort {
+        case .name: return f
+        case .recent: return f.sorted { (Stats.shared.of($0).last ?? .distantPast) > (Stats.shared.of($1).last ?? .distantPast) }
+        case .time: return f.sorted { Stats.shared.of($0).seconds > Stats.shared.of($1).seconds }
+        }
+    }
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                ForEach(library.games) { g in
-                    HStack(spacing: 10) {
-                        Image(nsImage: g.icon).resizable().frame(width: 36, height: 36)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(g.name).lineLimit(2)
-                            Text(library.running.contains(g.id) ? "Playing" : g.version).font(.caption).foregroundStyle(library.running.contains(g.id) ? .green : .secondary)
+                Label("All Games", systemImage: "square.grid.2x2").tag(homeID)
+                Section("Games") {
+                    ForEach(shown) { g in
+                        HStack(spacing: 10) {
+                            Color.clear.frame(width: 34, height: 34).overlay(CoverArt(game: g)).clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(g.title).lineLimit(1)
+                                if library.running.contains(g.id) { Text("Playing").font(.caption).foregroundStyle(.green) }
+                            }
                         }
-                    }
-                    .padding(.vertical, 2)
-                    .tag(g.id)
-                    .contextMenu {
-                        Button("Play") { library.play(g) }
-                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([g.url]) }
+                        .padding(.vertical, 1)
+                        .tag(g.id)
+                        .contextMenu { GameMenu(game: g) }
                     }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
-            .overlay {
-                if library.games.isEmpty {
-                    VStack(spacing: 12) {
-                        Text("No games yet").font(.headline)
-                        Text("Add the folder your nxnative Mac apps are in.").foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        Button("Add Folder…") { addFolder(library) }
-                        Button("Build a Game…") { openWindow(id: "build") }
-                    }.padding()
-                }
-            }
-            .toolbar {
-                ToolbarItem { Button { addFolder(library) } label: { Label("Add Folder", systemImage: "folder.badge.plus") } }
-                ToolbarItem { Button { library.scan() } label: { Label("Refresh", systemImage: "arrow.clockwise") } }
-                ToolbarItem { Button { openWindow(id: "build") } label: { Label("Build Games", systemImage: "hammer") } }
-                ToolbarItem { Button { openWindow(id: "devices") } label: { Label("Install on iPhone or iPad", systemImage: "iphone.and.arrow.forward") } }
-            }
+            .navigationSplitViewColumnWidth(min: 220, ideal: 270)
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                 for p in providers { _ = p.loadObject(ofClass: URL.self) { u, _ in if let u { DispatchQueue.main.async { library.addFolder(u) } } } }
                 return true
             }
         } detail: {
-            if let g = selected { GameView(game: g, page: $page).id(g.id) }
-            else { Text("Pick a game").foregroundStyle(.secondary) }
+            Group {
+                if library.games.isEmpty {
+                    ContentUnavailableView {
+                        Label("No games yet", systemImage: "gamecontroller")
+                    } description: {
+                        Text("Build a game from its NSP folder, dump folder or .nup, or add the folder your nxnative Mac apps are in.")
+                    } actions: {
+                        Button("Build a Game…") { openWindow(id: "build") }.buttonStyle(.borderedProminent)
+                        Button("Add Folder…") { addFolder(library) }
+                    }
+                } else if let g = selected { GameView(game: g, page: $page).id(g.id) }
+                else { HomeGrid(games: shown, selection: $selection) }
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Menu {
+                        Picker("Sort By", selection: $sort) { ForEach(LibrarySort.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.inline)
+                    } label: { Label("Sort: \(sort.rawValue)", systemImage: "arrow.up.arrow.down") }
+                    .help("Sort the games: \(sort.rawValue)")
+                }
+                ToolbarItem {
+                    Menu {
+                        Button("Build a Game…") { openWindow(id: "build") }
+                        Button("Rebuild All Games") { rebuildAll(library.games, library: library, builder: builder) { openWindow(id: "build") } }
+                            .disabled(library.games.isEmpty)
+                    } label: { Label("Build", systemImage: "hammer") } primaryAction: { openWindow(id: "build") }
+                    .help("Build a game (click), or rebuild every game after an nxnative update (hold)")
+                }
+                ToolbarItem { Button { openWindow(id: "devices") } label: { Label("Install on iPhone or iPad", systemImage: "iphone.and.arrow.forward") } }
+                ToolbarItem { Button { addFolder(library) } label: { Label("Add Folder", systemImage: "folder.badge.plus") } }
+                ToolbarItem { Button { library.scan() } label: { Label("Refresh", systemImage: "arrow.clockwise") } }
+            }
         }
-        .onAppear { if selection == nil { selection = library.games.first?.id }; bindPad() }
-        .onChange(of: library.games) { if selected == nil { selection = library.games.first?.id } }
+        .searchable(text: $search, placement: .sidebar, prompt: "Search games")
+        .onChange(of: search) { if !search.isEmpty && selected != nil { selection = homeID } }
+        .onChange(of: library.games) { if selection != homeID && selected == nil { selection = homeID } }
+        .onAppear { bindPad() }
         .alert(item: $library.lastExit) { e in
             Alert(title: Text(e.game.name), message: Text(e.message),
                   primaryButton: .default(Text("Open Log")) { NSWorkspace.shared.open(e.game.log) }, secondaryButton: .cancel(Text("OK")))
@@ -117,7 +151,7 @@ struct LibraryView: View {
 
     private func bindPad() {
         pad.onMove = { d in
-            let ids = library.games.map(\.id); guard !ids.isEmpty else { return }
+            let ids = [homeID] + shown.map(\.id)
             let i = selection.flatMap { ids.firstIndex(of: $0) } ?? 0
             selection = ids[max(0, min(ids.count - 1, i + d))]
         }
@@ -138,28 +172,21 @@ struct GameView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                Image(nsImage: game.icon).resizable().frame(width: 72, height: 72)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(game.name).font(.title2.bold())
-                    Text("\(game.version.isEmpty ? "" : "Version \(game.version) · ")\(game.titleID)").foregroundStyle(.secondary).textSelection(.enabled)
-                }
-                Spacer()
-                if let r = builder.source(of: game.titleID), FileManager.default.fileExists(atPath: r.source.path) {
-                    Button("Rebuild") { builder.enqueue(r); openWindow(id: "build") }.controlSize(.large)
-                        .help("Build this game again from \(r.source.path): after a game update or a newer nxnative")
-                }
+            GameHeader(game: game) {
+                Button("Rebuild") { rebuildGame(game, builder: builder) { openWindow(id: "build") } }
+                    .controlSize(.large).disabled(library.running.contains(game.id))
+                    .help(builder.rebuildRequest(for: game).map { "Build this game again from \($0.source.path): after a game update or a newer nxnative" }
+                          ?? "Build this game again: choose its NSP folder, dump folder or .nup")
                 if library.running.contains(game.id) {
                     Button("Stop") { library.stop(game) }.controlSize(.large)
-                    Button("Show Game") { library.play(game) }.controlSize(.large)
+                    Button("Show Game") { library.play(game) }.controlSize(.large).buttonStyle(.borderedProminent)
                 } else {
-                    Button { library.play(game) } label: { Label("Play", systemImage: "play.fill").padding(.horizontal, 8) }
+                    Button { library.play(game) } label: { Label("Play", systemImage: "play.fill").padding(.horizontal, 10) }
                         .controlSize(.large).buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: [.command])
                 }
             }
-            .padding()
             Picker("", selection: $page) { ForEach(Page.allCases) { Text($0.rawValue).tag($0) } }
-                .pickerStyle(.segmented).labelsHidden().padding(.horizontal).frame(maxWidth: 520)
+                .pickerStyle(.segmented).labelsHidden().padding(.horizontal).frame(maxWidth: 520).padding(.top, 4)
             Divider().padding(.top, 8)
             switch page {
             case .settings: GameSettingsView(game: game)
@@ -249,9 +276,12 @@ struct SavesView: View {
 
 struct FoldersView: View {
     @EnvironmentObject var library: Library
+    @AppStorage("appearance") private var appearance: Appearance = .system
     @State private var pick: URL?
     var body: some View {
         VStack(alignment: .leading) {
+            Picker("Appearance", selection: $appearance) { ForEach(Appearance.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(maxWidth: 320)
+            Divider().padding(.vertical, 4)
             Text("Library folders").font(.headline)
             Text("nxnative Mac apps in these folders (and three levels of subfolders) appear in the library.").font(.footnote).foregroundStyle(.secondary)
             List(selection: $pick) { ForEach(library.folders, id: \.self) { Text($0.path).tag($0) } }
@@ -296,4 +326,43 @@ final class GamepadNav: ObservableObject {
             if d != self.stickLatch[id, default: 0] { self.stickLatch[id] = d; if d != 0 { self.act { self.onMove?(d) } } }
         }
     }
+}
+
+/// Rebuild: the source the launcher knows or finds beside the app, else the one the player chooses; prod.keys asked for when NSPs need them
+func rebuildGame(_ game: Game, builder: Builder, show: () -> Void) {
+    var r = builder.rebuildRequest(for: game)
+    if r == nil {
+        let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = true; p.directoryURL = game.url.deletingLastPathComponent()
+        p.message = "Choose \(game.name)'s NSP folder, dump folder or .nup file"
+        guard p.runModal() == .OK, let u = p.url else { return }
+        let beside = u.pathExtension.lowercased() == "nup" ? u.deletingLastPathComponent() : u, here = game.url.deletingLastPathComponent()
+        r = BuildRequest(source: u, target: .mac, outFolder: beside.standardizedFileURL == here.standardizedFileURL ? nil : here)
+    }
+    guard var req = r, askKeysIfNeeded([req], builder: builder) else { return }
+    req.fallbackIcon = Builder.iconPNG(of: game)
+    builder.enqueue(req); show()
+}
+
+/// Rebuild All Games: every game that is not running and whose source is known or found beside its app, one after the other; the others are named in an alert
+func rebuildAll(_ games: [Game], library: Library, builder: Builder, show: () -> Void) {
+    var reqs: [BuildRequest] = [], skipped: [String] = []
+    for g in games {
+        if library.running.contains(g.id) { skipped.append("\(g.name) (playing)"); continue }
+        guard var r = builder.rebuildRequest(for: g) else { skipped.append("\(g.name) (its files were not found beside the app: use Rebuild on its page)"); continue }
+        r.fallbackIcon = Builder.iconPNG(of: g); reqs.append(r)
+    }
+    if !reqs.isEmpty, askKeysIfNeeded(reqs, builder: builder) { reqs.forEach(builder.enqueue); show() }
+    if !skipped.isEmpty {
+        let a = NSAlert(); a.messageText = reqs.isEmpty ? "No game can be rebuilt" : "Rebuilding \(reqs.count) of \(games.count) games"
+        a.informativeText = "Not rebuilt:\n" + skipped.joined(separator: "\n"); a.runModal()
+    }
+}
+
+/// prod.keys, asked for once when any of these builds reads NSPs and none is set; false when the player cancels
+func askKeysIfNeeded(_ reqs: [BuildRequest], builder: Builder) -> Bool {
+    guard reqs.contains(where: { builder.needsKeys($0.source) }), builder.keys.isEmpty else { return true }
+    let p = NSOpenPanel(); p.canChooseFiles = true; p.canChooseDirectories = false; p.message = "Choose prod.keys (dumped from your Switch): NSPs need them"
+    guard p.runModal() == .OK, let u = p.url else { return false }
+    builder.keys = u.path
+    return true
 }
