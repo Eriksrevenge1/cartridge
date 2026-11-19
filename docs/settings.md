@@ -60,6 +60,15 @@ Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its worl
 - **Cost:** more GPU time each frame, which can increase heat on an iPhone. [Breath of the Wild's measurements](../dm/games/01007EF00011E000/README.md#upscaling-current) cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Nothing changes while the game's picture is as large as the screen. Unsupported devices and sizes use Standard scaling.
 - **On the Mac:** choose **MetalFX** under **Upscaling** in the [settings window](#the-mac-settings-window)'s Advanced settings, or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
 
+### Frame generation
+
+Mac only, off by default. When a game shows each frame for two screen refreshes or more (30 fps on a 60 Hz screen, or 60 fps on a 120 Hz one), the app draws a frame halfway between each two and shows it on the refresh in between, so motion looks twice as smooth. The game itself runs no faster.
+
+- **How:** the app estimates the motion between the game's last two pictures on the GPU and blends them along it. Games hand over no motion vectors, which MetalFX's own frame interpolator needs.
+- **Cost:** the game's own frame reaches the screen one refresh later (16.7 ms at 60 Hz), the generated picture taking its place. GPU time is small: on an Apple M6, Ocarina of Time at 2560x1440 capped at 30 fps showed 60 pictures a second with the whole present (motion estimate, blend and present pass) at 0.45-0.55 ms a picture. Fine ground texture can look slightly softer in the generated pictures, and where the two frames disagree (something coming out from behind something else, a camera cut) the newer frame is shown, so fast motion can smear slightly at edges.
+- **When to use it:** for a game held at 30 fps (by its own cap, or the Frame rate setting to save heat), or a 60 fps game on a 120 Hz ProMotion screen. It does nothing for a game that already fills every refresh, and it needs the display link (the default).
+- **Turn it on:** **Frame generation** in the settings window, or `DM_FRAMEGEN=1` in the game's `env.txt`.
+
 ### Game's upscaler
 
 Shown only for games that upscale their own picture with a network of their own before the app sees it: agl's NDSR network, in Donkey Kong Bananza and Splatoon Raiders. **Game's own**, the default, keeps the game's upscaler. **MetalFX** replaces it with Apple's MetalFX spatial scaler: the same input and output sizes, at a fraction of the GPU time, but Apple's scaler's picture rather than the game's.
@@ -286,6 +295,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Press a button to join | `DM_PAD_PRESS_TO_JOIN` | `1`, `0` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | Game's upscaler | `DM_UPSCALER` | `game`, `metalfx` |
+| Frame generation | `DM_FRAMEGEN` | `1`, `0` (Mac) |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |
