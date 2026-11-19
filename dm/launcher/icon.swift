@@ -1,6 +1,7 @@
-// Cartridge's app icon, drawn here (scripts/build_launcher.py runs it): a glossy black tile, like a console's shell, with a red game card standing on it: its corner cut
-// the way it goes in, grip grooves at its top, a dark glossy label, and a thin light along the tile's top edge. Usage: swift icon.swift <out.iconset>
+// Cartridge's app icon, drawn here (scripts/build_launcher.py runs it): a black glass tile with a game card's outline in neon, cyan on its left half and red on its
+// right like a console's two controllers, a row of glowing contacts along the card's bottom, and the glow's reflection on the tile. Usage: swift icon.swift <out.iconset>
 import AppKit
+import CoreImage
 
 func draw(_ px: Int) -> Data {
     let s = CGFloat(px)
@@ -19,17 +20,17 @@ func draw(_ px: Int) -> Data {
     ctx.restoreGState()
     tilePath.addClip()
     let rgb = { (r: CGFloat, g: CGFloat, b: CGFloat) in NSColor(srgbRed: r, green: g, blue: b, alpha: 1) }
-    // the tile: near-black, a little lighter at the top, with a sheen across its upper half and a fine light along its top edge
-    NSGradient(colors: [rgb(0.03, 0.03, 0.035), rgb(0.13, 0.13, 0.145)])!.draw(in: tile, angle: 90)
-    NSGradient(colors: [NSColor.white.withAlphaComponent(0.07), NSColor.white.withAlphaComponent(0)])!.draw(in: CGRect(x: tile.minX, y: tile.midY, width: tile.width, height: tile.height / 2), angle: -90)
-    let u = tile.width, cx = tile.midX, cy = tile.midY - u * 0.01
-    // a red glow under the card
-    let glow = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [rgb(0.95, 0.05, 0.10).withAlphaComponent(0.45).cgColor,
-                          rgb(0.95, 0.05, 0.10).withAlphaComponent(0).cgColor] as CFArray, locations: [0, 1])!
-    ctx.drawRadialGradient(glow, startCenter: CGPoint(x: cx, y: cy - u * 0.05), startRadius: 0, endCenter: CGPoint(x: cx, y: cy - u * 0.05), endRadius: u * 0.5, options: [])
+    let space = CGColorSpace(name: CGColorSpace.sRGB)!
+    let u = tile.width, cx = tile.midX, cy = tile.midY + u * 0.03
+    let cyan = rgb(0.05, 0.82, 1.0), red = rgb(1.0, 0.18, 0.30)
 
-    // the card: upright, its top-right corner cut off, red with a lighter top and a darker rim
-    let w = u * 0.50, h = u * 0.60, r = u * 0.05, notch = u * 0.10
+    // the tile: black glass, a faint lift in the middle, darker at the edges, a sheen across the top
+    NSGradient(colors: [rgb(0.015, 0.015, 0.025), rgb(0.06, 0.06, 0.08)])!.draw(in: tile, angle: 90)
+    let lift = CGGradient(colorsSpace: space, colors: [rgb(0.16, 0.14, 0.22).withAlphaComponent(0.55).cgColor, rgb(0, 0, 0).withAlphaComponent(0).cgColor] as CFArray, locations: [0, 1])!
+    ctx.drawRadialGradient(lift, startCenter: CGPoint(x: cx, y: cy), startRadius: 0, endCenter: CGPoint(x: cx, y: cy), endRadius: u * 0.62, options: [])
+
+    // the card: upright, its top-right corner cut off
+    let w = u * 0.46, h = u * 0.56, r = u * 0.06, notch = u * 0.11
     let x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2
     let card = NSBezierPath()
     card.move(to: CGPoint(x: x0 + r, y: y0))
@@ -38,40 +39,61 @@ func draw(_ px: Int) -> Data {
     card.line(to: CGPoint(x: x0 + r, y: y1)); card.curve(to: CGPoint(x: x0, y: y1 - r), controlPoint1: CGPoint(x: x0, y: y1), controlPoint2: CGPoint(x: x0, y: y1))
     card.line(to: CGPoint(x: x0, y: y0 + r)); card.curve(to: CGPoint(x: x0 + r, y: y0), controlPoint1: CGPoint(x: x0, y: y0), controlPoint2: CGPoint(x: x0, y: y0))
     card.close()
-    ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -u * 0.025), blur: u * 0.06, color: NSColor.black.withAlphaComponent(0.7).cgColor)
-    rgb(0.85, 0.04, 0.09).setFill(); card.fill()
-    ctx.restoreGState()
-    NSGradient(colors: [rgb(1.0, 0.22, 0.24), rgb(0.86, 0.03, 0.10), rgb(0.62, 0.02, 0.07)])!.draw(in: card, angle: -90)
-    card.lineWidth = u * 0.008; NSColor.black.withAlphaComponent(0.28).setStroke(); card.stroke()
-    // a bright edge along the card's left side and top
-    ctx.saveGState(); card.addClip()
-    NSGradient(colors: [NSColor.white.withAlphaComponent(0.30), NSColor.white.withAlphaComponent(0)])!.draw(in: CGRect(x: x0, y: y0, width: w * 0.12, height: h), angle: 0)
-    ctx.restoreGState()
+    card.lineJoinStyle = .round; card.lineCapStyle = .round
 
-    // grip grooves across the top
-    for i in 0..<4 {
-        let gy = y1 - notch * 0.55 - CGFloat(i) * u * 0.026, gx = x0 + w * 0.12, gw = w * 0.56, gh = u * 0.010
-        NSColor.black.withAlphaComponent(0.35).setFill()
-        NSBezierPath(roundedRect: CGRect(x: gx, y: gy, width: gw, height: gh), xRadius: gh / 2, yRadius: gh / 2).fill()
-        NSColor.white.withAlphaComponent(0.18).setFill()
-        NSBezierPath(roundedRect: CGRect(x: gx, y: gy - gh * 0.6, width: gw, height: gh * 0.5), xRadius: gh / 4, yRadius: gh / 4).fill()
+    // inside the card: a very dark tint, so the neon frames something
+    NSGradient(colors: [rgb(0.06, 0.07, 0.10).withAlphaComponent(0.9), rgb(0.02, 0.02, 0.03).withAlphaComponent(0.9)])!.draw(in: card, angle: -90)
+
+    // the contacts: short pins along the bottom, in the same split colours
+    let pins = NSBezierPath(), n = 6, pw = w * 0.055, ph = h * 0.13, span = w * 0.62, gap = (span - CGFloat(n) * pw) / CGFloat(n - 1)
+    for i in 0..<n { pins.append(NSBezierPath(roundedRect: CGRect(x: cx - span / 2 + CGFloat(i) * (pw + gap), y: y0 + h * 0.10, width: pw, height: ph), xRadius: pw / 2, yRadius: pw / 2)) }
+
+    // neon: the tube and the pins drawn once, coloured cyan on the left and red on the right with a short blend between, into an image of their own; then that image
+    // blurred at three sizes and added on (bloom), the sharp tube on top with a white-hot core, and the whole once more mirrored below as a faint reflection
+    let px = Int(s), bounds = CGRect(x: 0, y: 0, width: s, height: s)
+    func layer(_ draw: (CGContext) -> Void) -> CGImage {
+        let c = CGContext(data: nil, width: px, height: px, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = NSGraphicsContext(cgContext: c, flipped: false)
+        draw(c); NSGraphicsContext.restoreGraphicsState(); return c.makeImage()!
     }
-    // the label: a dark glossy panel set into the card, with a soft reflection across its top
-    let lw = w * 0.80, lh = h * 0.50, lx = cx - lw / 2, ly = y0 + h * 0.10
-    let label = NSBezierPath(roundedRect: CGRect(x: lx, y: ly, width: lw, height: lh), xRadius: u * 0.03, yRadius: u * 0.03)
-    NSGradient(colors: [rgb(0.05, 0.05, 0.06), rgb(0.17, 0.17, 0.19)])!.draw(in: label, angle: 90)
-    ctx.saveGState(); label.addClip()
-    let shine = NSBezierPath(); shine.move(to: CGPoint(x: lx, y: ly + lh)); shine.line(to: CGPoint(x: lx + lw * 0.62, y: ly + lh))
-    shine.line(to: CGPoint(x: lx + lw * 0.30, y: ly)); shine.line(to: CGPoint(x: lx, y: ly)); shine.close()
-    NSColor.white.withAlphaComponent(0.07).setFill(); shine.fill()
+    let split = CGGradient(colorsSpace: space, colors: [cyan.cgColor, cyan.cgColor, red.cgColor, red.cgColor] as CFArray, locations: [0, 0.47, 0.53, 1])!
+    let tube = layer { c in
+        card.lineWidth = u * 0.028
+        let outline = NSBezierPath(); outline.append(card)
+        c.saveGState()
+        c.addPath(card.cgPath); c.setLineWidth(u * 0.028); c.setLineJoin(.round); c.replacePathWithStrokedPath()
+        c.addPath(pins.cgPath); c.clip()
+        c.drawLinearGradient(split, start: CGPoint(x: x0, y: 0), end: CGPoint(x: x1, y: 0), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+        c.restoreGState()
+    }
+    let core = layer { c in
+        c.addPath(card.cgPath); c.setLineWidth(u * 0.006); c.setLineJoin(.round); c.setStrokeColor(NSColor.white.withAlphaComponent(0.7).cgColor); c.strokePath()
+        c.addPath(pins.cgPath); c.setFillColor(NSColor.white.withAlphaComponent(0.25).cgColor); c.fillPath()
+    }
+    let ci = CIContext(options: [.workingColorSpace: space])
+    func blurred(_ img: CGImage, _ radius: CGFloat) -> CGImage {
+        let out = CIImage(cgImage: img).clampedToExtent().applyingGaussianBlur(sigma: Double(radius)).cropped(to: CIImage(cgImage: img).extent)
+        return ci.createCGImage(out, from: out.extent)!
+    }
+    let blooms = [(u * 0.09, 0.75), (u * 0.035, 0.9), (u * 0.012, 1.0)].map { (blurred(tube, $0.0), CGFloat($0.1)) }
+    func neon() {
+        ctx.saveGState(); ctx.setBlendMode(.screen)
+        for (img, a) in blooms { ctx.setAlpha(a); ctx.draw(img, in: bounds) }
+        ctx.setAlpha(1); ctx.draw(tube, in: bounds)
+        ctx.setBlendMode(.normal); ctx.draw(core, in: bounds)
+        ctx.restoreGState()
+    }
+    // the reflection: mirrored about the card's bottom edge (a little below it), faint, only below the card
+    ctx.saveGState()
+    ctx.clip(to: CGRect(x: tile.minX, y: tile.minY, width: tile.width, height: y0 - u * 0.02 - tile.minY))
+    ctx.translateBy(x: 0, y: 2 * (y0 - u * 0.02)); ctx.scaleBy(x: 1, y: -1); ctx.setAlpha(0.14)
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil); neon(); ctx.endTransparencyLayer()
     ctx.restoreGState()
-    label.lineWidth = u * 0.006; NSColor.black.withAlphaComponent(0.5).setStroke(); label.stroke()
-    // a small light near the label's lower edge, as a card's printed mark would sit
-    NSColor.white.withAlphaComponent(0.85).setFill()
-    NSBezierPath(roundedRect: CGRect(x: lx + lw * 0.12, y: ly + lh * 0.14, width: lw * 0.30, height: u * 0.014), xRadius: u * 0.007, yRadius: u * 0.007).fill()
-    NSColor.white.withAlphaComponent(0.35).setFill()
-    NSBezierPath(roundedRect: CGRect(x: lx + lw * 0.12, y: ly + lh * 0.14 + u * 0.026, width: lw * 0.48, height: u * 0.014), xRadius: u * 0.007, yRadius: u * 0.007).fill()
+    neon()
+
+    // glass: a soft sheen over the top of the tile
+    let sheen = NSBezierPath(roundedRect: CGRect(x: tile.minX, y: tile.midY + u * 0.08, width: tile.width, height: tile.height / 2), xRadius: 0, yRadius: 0)
+    NSGradient(colors: [NSColor.white.withAlphaComponent(0.06), NSColor.white.withAlphaComponent(0)])!.draw(in: sheen, angle: -90)
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!
 }
