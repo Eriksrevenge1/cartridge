@@ -1,4 +1,4 @@
-// nxnative Launcher: a library of the nxnative Mac apps the player built, with each game's settings, mods, cheats, controls and saves, and Play. Built by scripts/build_launcher.py.
+// Cartridge (nxnative's Mac launcher): a library of the nxnative Mac apps the player built, with each game's settings, mods, cheats, controls and saves, and Play. Built by scripts/build_launcher.py.
 // It writes only what each app reads by itself (docs/frontends.md): the saved choices in the app's preferences, mods.txt, the cheat files, the controls files and the cloud
 // saves folder, so a game started from Finder or the Dock plays as it does from here. A controller drives the library: up and down pick a game, A plays it, B goes back to all
 // games, L and R change the page, Menu opens console mode (Console.swift).
@@ -15,7 +15,7 @@ struct LauncherApp: App {
     @AppStorage("appearance") private var appearance: Appearance = .system
 
     var body: some Scene {
-        WindowGroup("nxnative Launcher") {
+        WindowGroup("Cartridge") {
             LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder)
                 .frame(minWidth: 860, minHeight: 560)
                 .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder; appearance.apply() }

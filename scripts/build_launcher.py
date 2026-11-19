@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build nxnative Launcher, the Mac library app for the games the NSP script packs (dm/launcher).
+"""Build Cartridge, the Mac library app for the games the NSP script packs (dm/launcher).
 
 It lists the nxnative Mac apps in the folders you pick and edits each game's settings, mods, cheats, controls and cloud saves, then starts the game. It writes only
 what each game reads by itself (docs/frontends.md), so a game started from Finder plays the same.
 
-    python3 scripts/build_launcher.py                 # ~/Applications/nxnative Launcher.app
+    python3 scripts/build_launcher.py                 # ~/Applications/Cartridge.app
     python3 scripts/build_launcher.py --out /Applications
     python3 scripts/build_launcher.py --open          # and start it
 
@@ -20,7 +20,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-NAME = 'nxnative Launcher'
+NAME = 'Cartridge'
+OLD_NAMES = ['nxnative Launcher']   # the app's earlier names: a build moves a copy of one in the same folder to the Trash
+EXE = 'cartridge'
 BUNDLE_ID = 'org.nxnative.launcher'
 
 
@@ -66,12 +68,12 @@ def main():
         icon(stage / 'Contents/Resources', t)
         print(f'build_launcher: compiling {len(sources())} Swift files for macOS {minos}')
         run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-swift-version', '5', '-parse-as-library',
-             '-module-cache-path', Path(t) / 'module-cache', '-o', macos / 'nxnative-launcher', *sources(),
+             '-module-cache-path', Path(t) / 'module-cache', '-o', macos / EXE, *sources(),
              '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'GameController'])
         commit = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True).stdout.strip()
         with open(stage / 'Contents/Info.plist', 'wb') as f:
             plistlib.dump({
-                'CFBundleName': NAME, 'CFBundleDisplayName': NAME, 'CFBundleIdentifier': BUNDLE_ID, 'CFBundleExecutable': 'nxnative-launcher', 'CFBundleIconFile': 'AppIcon',
+                'CFBundleName': NAME, 'CFBundleDisplayName': NAME, 'CFBundleIdentifier': BUNDLE_ID, 'CFBundleExecutable': EXE, 'CFBundleIconFile': 'AppIcon',
                 'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.0', 'CFBundleVersion': '1', 'CFBundleInfoDictionaryVersion': '6.0',
                 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
                 'LSApplicationCategoryType': 'public.app-category.games', 'DMCommit': commit,
@@ -81,6 +83,12 @@ def main():
         if app.exists():
             shutil.rmtree(app)
         stage.rename(app)
+    for old in OLD_NAMES:   # the same app (its bundle ID and settings) under an earlier name: to the Trash, so the Dock and Launchpad show one
+        o = a.out / f'{old}.app'
+        if o.exists():
+            subprocess.run(['osascript', '-e', f'tell application "Finder" to delete POSIX file "{o}"'], capture_output=True)
+            if o.exists(): shutil.rmtree(o)
+            print(f'build_launcher: moved {o.name} (its earlier name) to the Trash')
     print(f'build_launcher: {app}')
     if a.open:
         subprocess.run(['open', app])

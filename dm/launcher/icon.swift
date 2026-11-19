@@ -1,5 +1,5 @@
-// nxnative Launcher's app icon, drawn here (scripts/build_launcher.py runs it): a rounded square in a red-to-violet gradient with a white game controller, its D-pad and
-// four face buttons cut out. Usage: swift icon.swift <out.iconset>
+// Cartridge's app icon, drawn here (scripts/build_launcher.py runs it): a rounded square in a red-to-violet gradient with a white game cartridge on it, its label cut out
+// with a play mark, and its contacts along the bottom. Usage: swift icon.swift <out.iconset>
 import AppKit
 
 func draw(_ px: Int) -> Data {
@@ -22,31 +22,38 @@ func draw(_ px: Int) -> Data {
     // a soft light from the top
     NSGradient(colors: [NSColor.white.withAlphaComponent(0.18), NSColor.white.withAlphaComponent(0)])!.draw(in: CGRect(x: tile.minX, y: tile.midY, width: tile.width, height: tile.height / 2), angle: -90)
 
-    // the controller: a wide body with two grips, in tile units
-    let u = tile.width, cx = tile.midX, cy = tile.midY - u * 0.02
-    let body = NSBezierPath()
-    let w = u * 0.62, h = u * 0.30, gripW = u * 0.17, gripH = u * 0.22
-    body.append(NSBezierPath(roundedRect: CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h), xRadius: h * 0.5, yRadius: h * 0.5))
-    for side in [-1.0, 1.0] {
-        let gx = cx + CGFloat(side) * (w / 2 - gripW * 0.55)
-        let grip = NSBezierPath(roundedRect: CGRect(x: gx - gripW / 2, y: cy - h / 2 - gripH * 0.55, width: gripW, height: gripH + h * 0.3), xRadius: gripW / 2, yRadius: gripW / 2)
-        body.append(grip)
-    }
-    body.windingRule = .nonZero
+    // the cartridge: a white card, a little taller than wide, its top-right corner cut off (the way one goes in), in tile units
+    let u = tile.width, cx = tile.midX, cy = tile.midY
+    let w = u * 0.52, h = u * 0.62, r = u * 0.05, notch = u * 0.11
+    let x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2
+    let card = NSBezierPath()
+    card.move(to: CGPoint(x: x0 + r, y: y0))
+    card.line(to: CGPoint(x: x1 - r, y: y0)); card.curve(to: CGPoint(x: x1, y: y0 + r), controlPoint1: CGPoint(x: x1, y: y0), controlPoint2: CGPoint(x: x1, y: y0))
+    card.line(to: CGPoint(x: x1, y: y1 - notch))
+    card.line(to: CGPoint(x: x1 - notch, y: y1))
+    card.line(to: CGPoint(x: x0 + r, y: y1)); card.curve(to: CGPoint(x: x0, y: y1 - r), controlPoint1: CGPoint(x: x0, y: y1), controlPoint2: CGPoint(x: x0, y: y1))
+    card.line(to: CGPoint(x: x0, y: y0 + r)); card.curve(to: CGPoint(x: x0 + r, y: y0), controlPoint1: CGPoint(x: x0, y: y0), controlPoint2: CGPoint(x: x0, y: y0))
+    card.close()
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -u * 0.015), blur: u * 0.04, color: NSColor.black.withAlphaComponent(0.25).cgColor)
-    NSColor.white.setFill(); body.fill()
+    ctx.setShadow(offset: CGSize(width: 0, height: -u * 0.02), blur: u * 0.05, color: NSColor.black.withAlphaComponent(0.3).cgColor)
+    NSColor.white.setFill(); card.fill()
     ctx.restoreGState()
 
-    // the D-pad and the face buttons, cut in the gradient's darker colour
-    let cut = NSColor(srgbRed: 0.42, green: 0.20, blue: 0.70, alpha: 1)
-    cut.setFill()
-    let dx = cx - w * 0.27, arm = u * 0.115, thick = u * 0.04
-    NSBezierPath(roundedRect: CGRect(x: dx - arm / 2, y: cy - thick / 2, width: arm, height: thick), xRadius: thick * 0.25, yRadius: thick * 0.25).fill()
-    NSBezierPath(roundedRect: CGRect(x: dx - thick / 2, y: cy - arm / 2, width: thick, height: arm), xRadius: thick * 0.25, yRadius: thick * 0.25).fill()
-    let bx = cx + w * 0.27, r = u * 0.026, d = u * 0.042
-    for (ox, oy) in [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)] {
-        NSBezierPath(ovalIn: CGRect(x: bx + CGFloat(ox) * d - r, y: cy + CGFloat(oy) * d - r, width: 2 * r, height: 2 * r)).fill()
+    // the label: a rounded window in the upper part, in the gradient's colours, with a white play mark
+    let lw = w * 0.78, lh = h * 0.52, lx = cx - lw / 2, ly = y1 - notch * 0.55 - lh
+    let label = NSBezierPath(roundedRect: CGRect(x: lx, y: ly, width: lw, height: lh), xRadius: u * 0.035, yRadius: u * 0.035)
+    NSGradient(colors: [NSColor(srgbRed: 0.93, green: 0.29, blue: 0.36, alpha: 1), NSColor(srgbRed: 0.50, green: 0.23, blue: 0.86, alpha: 1)])!.draw(in: label, angle: -60)
+    let pc = CGPoint(x: lx + lw / 2 + lw * 0.03, y: ly + lh / 2), ps = lh * 0.42
+    let play = NSBezierPath()
+    play.move(to: CGPoint(x: pc.x - ps * 0.42, y: pc.y + ps / 2)); play.line(to: CGPoint(x: pc.x + ps * 0.5, y: pc.y)); play.line(to: CGPoint(x: pc.x - ps * 0.42, y: pc.y - ps / 2)); play.close()
+    play.lineJoinStyle = .round; play.lineWidth = ps * 0.18
+    NSColor.white.setFill(); NSColor.white.setStroke(); play.fill(); play.stroke()
+
+    // the contacts: a row of short ridges along the bottom edge
+    NSColor(srgbRed: 0.42, green: 0.20, blue: 0.70, alpha: 0.85).setFill()
+    let n = 7, cw = w * 0.06, gap = (w * 0.72 - CGFloat(n) * cw) / CGFloat(n - 1), ch = h * 0.12, cx0 = cx - w * 0.36
+    for i in 0..<n {
+        NSBezierPath(roundedRect: CGRect(x: cx0 + CGFloat(i) * (cw + gap), y: y0 + h * 0.07, width: cw, height: ch), xRadius: cw * 0.4, yRadius: cw * 0.4).fill()
     }
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!

@@ -113,7 +113,7 @@ struct Controls: Equatable {
         let body = lines(over: base)
         if body.isEmpty { try? FileManager.default.removeItem(at: url); return }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let text = (["# nxnative controls (\(scope)), written by nxnative Launcher: dm/host/controls.h"] + body).joined(separator: "\n") + "\n"
+        let text = (["# nxnative controls (\(scope)), written by Cartridge: dm/host/controls.h"] + body).joined(separator: "\n") + "\n"
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 }
@@ -270,7 +270,7 @@ enum NX2AppleImport {
             for pair in map.split(separator: ",") where c.apply(Substring("pad " + pair)) { n += 1 }
             guard n > 0 else { continue }
             try? c.write(to: g.controlsFile, over: base, scope: "this game: \(g.name), from NX2Apple's controller map")
-            NSLog("nxnative Launcher: %@: NX2Apple's controller map (%@) imported into %@", g.name, map, g.controlsFile.path)
+            NSLog("Cartridge: %@: NX2Apple's controller map (%@) imported into %@", g.name, map, g.controlsFile.path)
         }
     }
 }

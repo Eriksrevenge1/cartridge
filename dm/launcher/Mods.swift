@@ -50,7 +50,7 @@ final class ModsModel: ObservableObject {
     }
     func save() {
         let on = mods.filter(\.on).map(\.name)
-        let text = "# Mods that are on, the first winning where two have the same file (nxnative Launcher; docs/frontends.md, Mods)\n" + on.map { $0 + "\n" }.joined()
+        let text = "# Mods that are on, the first winning where two have the same file (Cartridge; docs/frontends.md, Mods)\n" + on.map { $0 + "\n" }.joined()
         do {
             try FileManager.default.createDirectory(at: game.support, withIntermediateDirectories: true)
             try text.write(to: game.modsList, atomically: true, encoding: .utf8)

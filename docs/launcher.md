@@ -1,6 +1,6 @@
-# nxnative Launcher
+# Cartridge
 
-nxnative Launcher is a Mac app that keeps your games in one library. From it you can build games, change each game's settings, mods, cheats and controls, play the Mac apps, and install the IPAs on an iPhone or iPad over USB. It writes only what each game reads by itself ([Front ends](frontends.md)), so a game you start from Finder or the Dock plays the same as from the launcher.
+Cartridge, nxnative's launcher, is a Mac app that keeps your games in one library. From it you can build games, change each game's settings, mods, cheats and controls, play the Mac apps, and install the IPAs on an iPhone or iPad over USB. It writes only what each game reads by itself ([Front ends](frontends.md)), so a game you start from Finder or the Dock plays the same as from the launcher.
 
 ## Getting it
 
@@ -10,7 +10,7 @@ With the tools of [Build from the command line](../README.md#build-from-the-comm
 python3 scripts/build_launcher.py --open
 ```
 
-It puts **nxnative Launcher.app** in `~/Applications` (`--out` names another folder). Build it again after you update nxnative.
+It puts **Cartridge.app** in `~/Applications` (`--out` names another folder). Build it again after you update nxnative.
 
 ## The library
 

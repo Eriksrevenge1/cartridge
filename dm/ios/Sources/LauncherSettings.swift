@@ -56,7 +56,7 @@ final class LauncherModel: ObservableObject {
 
     private let defaults: UserDefaults
 
-    // environment: what this start's environment holds; the nxnative Launcher (dm/launcher) passes a game's, with the keys its env files set, and another app's defaults
+    // environment: what this start's environment holds; Cartridge, the Mac launcher (dm/launcher), passes a game's, with the keys its env files set, and another app's defaults
     init(_ settings: [Setting], defaults: UserDefaults = .standard, environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.defaults = defaults
         self.settings = settings

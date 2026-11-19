@@ -147,7 +147,7 @@ final class Library: ObservableObject {
             processes[g.id] = p; running.insert(g.id)
         } catch {
             lastExit = GameExit(game: g, status: -1)
-            NSLog("nxnative Launcher: cannot start %@: %@", g.executable.path, error.localizedDescription)
+            NSLog("Cartridge: cannot start %@: %@", g.executable.path, error.localizedDescription)
         }
     }
     func stop(_ g: Game) { processes[g.id]?.terminate() }   // SIGTERM: launcher.c forwards it to the host
