@@ -34,7 +34,7 @@ Changes take effect at the game's next start.
 
 The IPAs run on an iPhone with an A17 Pro or later and an iPad with an M1 or later. **Install on iPhone or iPad** signs an IPA with your own Apple ID and installs it over the cable:
 
-1. Once: sign in to your Apple ID in Xcode › Settings › Accounts, and put your team's ID (10 characters) in the install window. `brew install xcodegen` if you have not.
+1. Once: sign in to your Apple ID in Xcode › Settings › Accounts. The install window finds your team's ID (10 characters) by itself; if it does not, select your Apple ID there, click **Manage Certificates…**, add an **Apple Development** certificate with **+**, and click **Find**. `brew install xcodegen` if you have not.
 2. Connect the device, unlock it and trust this Mac. Developer Mode must be on (Settings › Privacy & Security › Developer Mode).
 3. Pick the device and the IPA and click **Install**. On the device, trust your certificate once: Settings › General › VPN & Device Management.
 

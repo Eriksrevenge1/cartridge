@@ -58,7 +58,7 @@ final class Devices: ObservableObject {
     weak var builder: Builder?
 
     init() {
-        team = UserDefaults.standard.string(forKey: "install.team") ?? Devices.xcodeTeam() ?? ""
+        team = UserDefaults.standard.string(forKey: "install.team") ?? Devices.xcodeTeam() ?? Devices.keychainTeam() ?? ""
         if let d = UserDefaults.standard.data(forKey: "install.ipas"), let l = try? JSONDecoder().decode([IPAItem].self, from: d) {
             ipas = l.filter { FileManager.default.fileExists(atPath: $0.path) }
         }
@@ -70,6 +70,18 @@ final class Devices: ObservableObject {
         guard let teams = UserDefaults(suiteName: "com.apple.dt.Xcode")?.dictionary(forKey: "IDEProvisioningTeams") else { return nil }
         for case let list as [[String: Any]] in teams.values { if let t = list.first?["teamID"] as? String { return t } }
         return nil
+    }
+    /// The team of an Apple Development certificate in the keychain: its subject's OU (Xcode › Settings › Accounts › Manage Certificates › + makes one)
+    static func keychainTeam() -> String? {
+        let (c, pem) = shell("/usr/bin/security", ["find-certificate", "-a", "-c", "Apple Development", "-p"])
+        guard c == 0, let first = pem.components(separatedBy: "-----END CERTIFICATE-----").first, first.contains("BEGIN") else { return nil }
+        let f = FileManager.default.temporaryDirectory.appendingPathComponent("nxl-cert-\(UUID().uuidString).pem")
+        defer { try? FileManager.default.removeItem(at: f) }
+        try? (first + "-----END CERTIFICATE-----\n").write(to: f, atomically: true, encoding: .utf8)
+        let (k, subject) = shell("/usr/bin/openssl", ["x509", "-noout", "-subject", "-nameopt", "multiline", "-in", f.path])
+        guard k == 0, let line = subject.split(separator: "\n").first(where: { $0.contains("organizationalUnitName") }) else { return nil }
+        let t = line.split(separator: "=").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        return t.count == 10 ? t : nil
     }
 
     func watch(_ on: Bool) {
@@ -280,7 +292,14 @@ struct DevicesView: View {
                     }
                 }
                 Section("Signing") {
-                    TextField("Team ID", text: $devices.team, prompt: Text("10 characters"))
+                    HStack {
+                        TextField("Team ID", text: $devices.team, prompt: Text("10 characters"))
+                        Button("Find") { devices.team = Devices.xcodeTeam() ?? Devices.keychainTeam() ?? devices.team }
+                    }
+                    if devices.team.count != 10 {
+                        Text("Not found yet: in Xcode › Settings › Accounts, select your Apple ID, click Manage Certificates…, add an Apple Development certificate with +, then click Find.")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
                     Text("The app is signed with your Apple ID: sign in to Xcode once (Settings › Accounts) and put your team's ID here. A free Apple ID works: its apps stop opening after 7 days (install again; the save stays) and only a few can be installed at once. A paid developer account has neither limit.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
