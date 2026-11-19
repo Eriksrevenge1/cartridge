@@ -4,8 +4,8 @@
 It lists the nxnative Mac apps in the folders you pick and edits each game's settings, mods, cheats, controls and cloud saves, then starts the game. It writes only
 what each game reads by itself (docs/frontends.md), so a game started from Finder plays the same.
 
-    python3 scripts/build_launcher.py                 # ~/Applications/Cartridge.app
-    python3 scripts/build_launcher.py --out /Applications
+    python3 scripts/build_launcher.py                 # /Applications/Cartridge.app (macOS's Apps list shows that folder's apps)
+    python3 scripts/build_launcher.py --out ~/Applications
     python3 scripts/build_launcher.py --open          # and start it
 
 Needs Xcode (the version README names) on a Mac with Apple silicon.
@@ -51,7 +51,7 @@ def min_os():   # the Mac host's minimum macOS (dm/mac/min_os.mk)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--out', type=Path, default=Path.home() / 'Applications', help='folder to put the app in (default ~/Applications)')
+    ap.add_argument('--out', type=Path, default=Path('/Applications'), help='folder to put the app in (default /Applications, which the Apps list shows)')
     ap.add_argument('--open', action='store_true', help='start the app when it is built')
     a = ap.parse_args()
     if sys.platform != 'darwin':
@@ -83,13 +83,15 @@ def main():
         if app.exists():
             shutil.rmtree(app)
         stage.rename(app)
-    for old in OLD_NAMES:   # the same app (its bundle ID and settings) under an earlier name: to the Trash, so the Dock and Launchpad show one
-        o = a.out / f'{old}.app'
-        if o.exists():
+    # the same app (its bundle ID and settings) under an earlier name, or in the other Applications folder: to the Trash, so the Dock and the Apps list show one
+    for o in [d / f'{n}.app' for d in {a.out, Path('/Applications'), Path.home() / 'Applications'} for n in [NAME] + OLD_NAMES]:
+        if o != app and o.exists():
             subprocess.run(['osascript', '-e', f'tell application "Finder" to delete POSIX file "{o}"'], capture_output=True)
             if o.exists(): shutil.rmtree(o)
-            print(f'build_launcher: moved {o.name} (its earlier name) to the Trash')
+            print(f'build_launcher: moved {o} to the Trash (an earlier copy)')
     print(f'build_launcher: {app}')
+    lsregister = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+    subprocess.run([lsregister, '-f', app], capture_output=True)   # known to Launch Services (and so the Apps list) at once, not at the next scan
     if a.open:
         subprocess.run(['open', app])
 

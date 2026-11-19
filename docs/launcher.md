@@ -10,7 +10,7 @@ With the tools of [Build from the command line](../README.md#build-from-the-comm
 python3 scripts/build_launcher.py --open
 ```
 
-It puts **Cartridge.app** in `~/Applications` (`--out` names another folder). Build it again after you update nxnative.
+It puts **Cartridge.app** in `/Applications`, where the Apps list shows it (`--out` names another folder), and moves a copy elsewhere, or one under its earlier name nxnative Launcher, to the Trash. Build it again after you update nxnative.
 
 ## The library
 
