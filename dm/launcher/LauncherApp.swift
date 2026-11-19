@@ -74,6 +74,7 @@ struct LibraryView: View {
     @State private var page: Page = .settings
     @State private var search = ""
     @AppStorage("library.sort") private var sort: LibrarySort = .recent
+    @ObservedObject private var finder = CoverFinder.shared
 
     private var selected: Game? { library.games.first { $0.id == selection } }
     /// The games the search and the sort leave, in order
@@ -150,6 +151,7 @@ struct LibraryView: View {
         .onChange(of: search) { if !search.isEmpty && selected != nil { selection = homeID } }
         .onChange(of: library.games) { if selection != homeID && selected == nil { selection = homeID } }
         .onAppear { bindPad() }
+        .sheet(item: $finder.game) { g in CoverFinderSheet(game: g) }
         .alert(item: $library.lastExit) { e in
             Alert(title: Text(e.game.name), message: Text(e.message),
                   primaryButton: .default(Text("Open Log")) { NSWorkspace.shared.open(e.game.log) }, secondaryButton: .cancel(Text("OK")))

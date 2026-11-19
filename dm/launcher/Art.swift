@@ -176,6 +176,7 @@ struct GameMenu: View {
         Button("Rebuild") { rebuildGame(game, builder: builder) { openWindow(id: "build") } }.disabled(library.running.contains(game.id))
         Button("Add Update or DLC…") { updateGame(game, builder: builder) { openWindow(id: "build") } }.disabled(library.running.contains(game.id))
         Divider()
+        Button("Find Cover…") { CoverFinder.shared.open(game) }
         Button("Choose Cover…") { chooseCover(game) }
         if Covers.shared.hasCustom(game) { Button("Remove Custom Cover") { Covers.shared.setCustom(game, from: nil) } }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([game.url]) }
@@ -222,6 +223,7 @@ struct GameHeader<Actions: View>: View {
             return true
         }
         .contextMenu {
+            Button("Find Cover…") { CoverFinder.shared.open(game) }
             Button("Choose Cover…") { chooseCover(game) }
             if Covers.shared.hasCustom(game) { Button("Remove Custom Cover") { Covers.shared.setCustom(game, from: nil) } }
         }
