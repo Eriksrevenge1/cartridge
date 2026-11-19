@@ -55,6 +55,10 @@ For a game without a profile, the script writes a survey and tries a provisional
 
 Switch 2 games are built from one `.nup` file or a folder of their files, not from NSPs, and are tested on the Mac only: see [Switch 2 games](#switch-2-games).
 
+### With nxnative Launcher
+
+A Mac app that builds your games, keeps them in a library with their settings, mods, cheats and controls, and installs the IPAs on an iPhone or iPad over USB: run `python3 scripts/build_launcher.py --open` once the tools below are installed. See [nxnative Launcher](docs/launcher.md).
+
 ### Build from the command line
 
 You need a Mac with macOS 26.6 or later, [Xcode](https://developer.apple.com/download/all/?q=Xcode%2027.2) 27.2, [Homebrew](https://brew.sh) and Python 3.12 or newer (an arm64 one, not an Intel Homebrew's). An iPhone build also needs Xcode's iOS platform (Xcode → Settings → Components).

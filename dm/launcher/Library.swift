@@ -120,6 +120,7 @@ final class Library: ObservableObject {
             }
         }
         games = found.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        NX2AppleImport.run(games)
     }
 
     /// Starts the game: its own launcher, without its settings window, so this launcher's choices apply as they are saved

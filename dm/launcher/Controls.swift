@@ -255,3 +255,22 @@ struct ControlsEditor: View {
         }
     }
 }
+
+/// NX2Apple kept a controller map in each app's preferences (launcher.DM_PAD_MAP, "A=B,B=A,…"), which the host never read. Once per game, a game without its own controls file
+/// gets that map as pad lines, so the player's swap works now; the key is left as it is
+enum NX2AppleImport {
+    static func run(_ games: [Game]) {
+        let done = UserDefaults.standard
+        for g in games where !done.bool(forKey: "imported.padmap.\(g.titleID)") {
+            done.set(true, forKey: "imported.padmap.\(g.titleID)")
+            guard !FileManager.default.fileExists(atPath: g.controlsFile.path),
+                  let map = UserDefaults(suiteName: g.bundleID)?.string(forKey: "launcher.DM_PAD_MAP"), !map.isEmpty else { continue }
+            let base = Controls.builtIn.with(ControlsModel.globalFile)
+            var c = base, n = 0
+            for pair in map.split(separator: ",") where c.apply(Substring("pad " + pair)) { n += 1 }
+            guard n > 0 else { continue }
+            try? c.write(to: g.controlsFile, over: base, scope: "this game: \(g.name), from NX2Apple's controller map")
+            NSLog("nxnative Launcher: %@: NX2Apple's controller map (%@) imported into %@", g.name, map, g.controlsFile.path)
+        }
+    }
+}

@@ -9,11 +9,14 @@ import SwiftUI
 struct LauncherApp: App {
     @StateObject private var library = Library()
     @StateObject private var pad = GamepadNav()
+    @StateObject private var builder = Builder()
+    @StateObject private var devices = Devices()
 
     var body: some Scene {
         WindowGroup("nxnative Launcher") {
-            LibraryView().environmentObject(library).environmentObject(pad)
+            LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder)
                 .frame(minWidth: 860, minHeight: 560)
+                .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder }
         }
         .commands {
             CommandGroup(after: .newItem) {
@@ -21,8 +24,20 @@ struct LauncherApp: App {
                 Button("Refresh Library") { library.scan() }.keyboardShortcut("r")
             }
         }
+        Window("Build Games", id: "build") {
+            BuildView().environmentObject(builder).frame(minWidth: 820, minHeight: 520)
+                .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder }
+        }
+        Window("Install on iPhone or iPad", id: "devices") {
+            DevicesView().environmentObject(devices).frame(minWidth: 780, minHeight: 480)
+                .onAppear { devices.builder = builder }
+        }
         Settings {
-            FoldersView().environmentObject(library).frame(width: 520, height: 320)
+            TabView {
+                FoldersView().environmentObject(library).tabItem { Label("Library", systemImage: "books.vertical") }
+                BuildSettingsView().environmentObject(builder).tabItem { Label("Building", systemImage: "hammer") }
+            }
+            .frame(width: 560, height: 340)
         }
     }
 }
@@ -42,6 +57,7 @@ enum Page: String, CaseIterable, Identifiable {
 struct LibraryView: View {
     @EnvironmentObject var library: Library
     @EnvironmentObject var pad: GamepadNav
+    @Environment(\.openWindow) private var openWindow
     @State private var selection: String?
     @State private var page: Page = .settings
 
@@ -73,12 +89,15 @@ struct LibraryView: View {
                         Text("No games yet").font(.headline)
                         Text("Add the folder your nxnative Mac apps are in.").foregroundStyle(.secondary).multilineTextAlignment(.center)
                         Button("Add Folder…") { addFolder(library) }
+                        Button("Build a Game…") { openWindow(id: "build") }
                     }.padding()
                 }
             }
             .toolbar {
                 ToolbarItem { Button { addFolder(library) } label: { Label("Add Folder", systemImage: "folder.badge.plus") } }
                 ToolbarItem { Button { library.scan() } label: { Label("Refresh", systemImage: "arrow.clockwise") } }
+                ToolbarItem { Button { openWindow(id: "build") } label: { Label("Build Games", systemImage: "hammer") } }
+                ToolbarItem { Button { openWindow(id: "devices") } label: { Label("Install on iPhone or iPad", systemImage: "iphone.and.arrow.forward") } }
             }
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                 for p in providers { _ = p.loadObject(ofClass: URL.self) { u, _ in if let u { DispatchQueue.main.async { library.addFolder(u) } } } }
@@ -114,6 +133,8 @@ struct GameView: View {
     let game: Game
     @Binding var page: Page
     @EnvironmentObject var library: Library
+    @EnvironmentObject var builder: Builder
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -124,6 +145,10 @@ struct GameView: View {
                     Text("\(game.version.isEmpty ? "" : "Version \(game.version) · ")\(game.titleID)").foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 Spacer()
+                if let r = builder.source(of: game.titleID), FileManager.default.fileExists(atPath: r.source.path) {
+                    Button("Rebuild") { builder.enqueue(r); openWindow(id: "build") }.controlSize(.large)
+                        .help("Build this game again from \(r.source.path): after a game update or a newer nxnative")
+                }
                 if library.running.contains(game.id) {
                     Button("Stop") { library.stop(game) }.controlSize(.large)
                     Button("Show Game") { library.play(game) }.controlSize(.large)

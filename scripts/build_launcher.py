@@ -68,6 +68,7 @@ def main():
                 'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.0', 'CFBundleVersion': '1', 'CFBundleInfoDictionaryVersion': '6.0',
                 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
                 'LSApplicationCategoryType': 'public.app-category.games', 'DMCommit': commit,
+                'DMRepo': str(ROOT), 'DMPython': sys.executable,   # where the Build window runs build_ipa_from_nsp.py, and with what (changeable in its settings)
             }, f)
         run(['codesign', '--force', '--sign', '-', stage])   # ad hoc, as the linker signs any arm64 binary: the bundle's seal covers Info.plist too
         if app.exists():
