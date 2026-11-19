@@ -28,6 +28,7 @@ typedef struct {
     double since;     // when the hold started (seconds, any clock that only goes forward)
     int home;         // Home was down at the last step (a press is a change from up to down)
     int a_up, b_up;   // A and B have been up since the prompt opened: a button already held when it opens does not count
+    int tap;          // Home was pressed and let go before the hold indicator showed (HQ_RING_S): a tap, which the front end takes (hq_take_tap)
 } home_quit;
 
 // Whether the hold does anything: on unless DM_HOME_QUIT=0 (env: its value, NULL when unset)
@@ -42,7 +43,7 @@ static inline hq_phase hq_step(home_quit *q, double now, int home, int a, int b)
         if (pressed) { q->phase = HQ_HOLDING; q->since = now; }
         break;
     case HQ_HOLDING:
-        if (!home) q->phase = HQ_IDLE;   // let go too early
+        if (!home) { q->tap = now - q->since < HQ_RING_S; q->phase = HQ_IDLE; }   // let go too early: a quick tap is the front end's (hq_take_tap), a longer press nothing
         else if (now - q->since >= HQ_HOLD_S) { q->phase = HQ_PROMPT; q->a_up = !a; q->b_up = !b; }
         break;
     case HQ_PROMPT:
@@ -60,8 +61,11 @@ static inline hq_phase hq_step(home_quit *q, double now, int home, int a, int b)
     return q->phase;
 }
 
+// Whether the last step ended a tap of Home, once: the Mac front end brings Cartridge forward on it (the game goes on behind it), as a tap of Home opens the console's home menu
+static inline int hq_take_tap(home_quit *q) { int t = q->tap; q->tap = 0; return t; }
+
 // The window lost focus (another app, the Games app the system opened for Home): whatever was shown closes. A Home still held needs a new press
-static inline void hq_cancel(home_quit *q) { if (q->phase != HQ_QUIT) { q->phase = HQ_IDLE; q->home = 1; } }
+static inline void hq_cancel(home_quit *q) { if (q->phase != HQ_QUIT) { q->phase = HQ_IDLE; q->home = 1; q->tap = 0; } }
 
 // The game gets no controller input in these phases
 static inline int hq_blocks_input(hq_phase p) { return p == HQ_PROMPT || p == HQ_SETTLE || p == HQ_QUIT; }

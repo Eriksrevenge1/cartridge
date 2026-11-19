@@ -27,6 +27,18 @@ int main(void) {
     hq_step(&q, 0, 1, 0, 0);
     CHECK(hq_step(&q, 1.0, 0, 0, 0) == HQ_IDLE, "let go before 2 s: nothing happens");
     CHECK(hq_step(&q, 5.0, 0, 0, 0) == HQ_IDLE, "and nothing later either");
+    CHECK(!hq_take_tap(&q), "a press let go after the indicator showed is no tap");
+
+    q = (home_quit){0};
+    hq_step(&q, 0, 1, 0, 0);
+    CHECK(hq_step(&q, HQ_RING_S / 2, 0, 0, 0) == HQ_IDLE, "a quick tap: idle again");
+    CHECK(hq_take_tap(&q), "a quick tap is a tap");
+    CHECK(!hq_take_tap(&q), "taken once");
+    hq_step(&q, 1.0, 1, 0, 0); hq_step(&q, 3.0, 1, 0, 0); hq_step(&q, 3.1, 0, 0, 0);
+    CHECK(!hq_take_tap(&q), "a hold that opened the prompt is no tap");
+    q = (home_quit){0};
+    hq_step(&q, 0, 1, 0, 0); hq_cancel(&q);
+    CHECK(!hq_take_tap(&q), "a focus loss is no tap");
 
     q = (home_quit){0};
     hq_step(&q, 0, 1, 0, 0); hq_step(&q, 2.0, 1, 0, 0);
