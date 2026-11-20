@@ -25,6 +25,11 @@ struct Game: Identifiable, Hashable {
     var envFile: URL { support.appendingPathComponent("env.txt") }
     var log: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/nxnative/\(titleID).log") }
     var icon: NSImage { NSWorkspace.shared.icon(forFile: url.path) }
+    /// This build of the app: its executable's date and size, which every build or rebuild changes
+    var buildStamp: String {
+        let a = try? FileManager.default.attributesOfItem(atPath: executable.path)
+        return "\((a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)-\((a?[.size] as? NSNumber)?.int64Value ?? 0)"
+    }
 
     init?(app: URL) {
         guard let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
@@ -90,6 +95,9 @@ final class Library: ObservableObject {
     @Published var games: [Game] = []
     @Published var running: Set<String> = []   // game ids
     @Published var lastExit: GameExit?
+    /// Games started for the first time since they were built, not yet open: macOS checks a new app's code signature over the whole bundle before it runs, which for a
+    /// game of several GB can take minutes (the game page says so while it lasts)
+    @Published var verifying: Set<String> = []
     private var processes: [String: Process] = [:]
     private let store = UserDefaults.standard
 
@@ -139,11 +147,12 @@ final class Library: ObservableObject {
         if env["DM_SCREEN"] == nil, let s = UserDefaults(suiteName: g.bundleID)?.string(forKey: "display.screen"), !s.isEmpty, g.envFileValues()["DM_SCREEN"] == nil { env["DM_SCREEN"] = s }
         p.environment = env
         let started = Date()
+        if isFirstStart(g) { verifying.insert(g.id) }
         p.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
                 guard let self else { return }
                 Stats.shared.played(g, from: started)   // before running changes, so the views that redraw read the new time
-                self.running.remove(g.id); self.processes[g.id] = nil
+                self.running.remove(g.id); self.processes[g.id] = nil; self.verifying.remove(g.id)
                 let s = proc.terminationReason == .uncaughtSignal ? 128 + proc.terminationStatus : proc.terminationStatus
                 if s != 0 { self.lastExit = GameExit(game: g, status: s) }
                 NSApp.activate(ignoringOtherApps: true)
@@ -160,15 +169,19 @@ final class Library: ObservableObject {
     }
     /// Since macOS 14 an app started in the background may not take the focus from the app in front, here Cartridge: the game's own activate was refused, so it opened behind
     /// Cartridge, its fullscreen space hidden where both share a screen, and macOS gave it a covered window's display link. So Cartridge yields to it once it is running
+    /// The game is looked for until it is running, for as long as its process lives while macOS checks a new build (that can outlast any fixed count of tries)
     private func handFocus(to g: Game, tries: Int = 40) {
-        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).first {
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).first, app.isFinishedLaunching {
             if #available(macOS 14.0, *) { NSApp.yieldActivation(to: app) }
             app.activate()
+            if verifying.remove(g.id) != nil || isFirstStart(g) { store.set(g.buildStamp, forKey: "started.\(g.id)") }
             return
         }
-        guard tries > 0, running.contains(g.id) else { return }
+        guard tries > 0 || verifying.contains(g.id), running.contains(g.id) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.handFocus(to: g, tries: tries - 1) }
     }
+    /// This build of the game has not been started from here yet (a new build, or a rebuild): its first start waits for macOS to check it
+    func isFirstStart(_ g: Game) -> Bool { store.string(forKey: "started.\(g.id)") != g.buildStamp }
     func stop(_ g: Game) { processes[g.id]?.terminate() }   // SIGTERM: launcher.c forwards it to the host
 }
 

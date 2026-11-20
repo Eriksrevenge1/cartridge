@@ -102,7 +102,8 @@ struct LibraryView: View {
                             Color.clear.frame(width: 34, height: 34).overlay(CoverArt(game: g)).clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(g.title).lineLimit(1)
-                                if library.running.contains(g.id) { Text("Playing").font(.caption).foregroundStyle(.green) }
+                                if library.verifying.contains(g.id) { Text("Starting…").font(.caption).foregroundStyle(.secondary) }
+                                else if library.running.contains(g.id) { Text("Playing").font(.caption).foregroundStyle(.green) }
                             }
                         }
                         .padding(.vertical, 1)
@@ -205,6 +206,7 @@ struct GameView: View {
                         .controlSize(.large).buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: [.command])
                 }
             }
+            FirstStartNote(game: game)
             Picker("", selection: $page) { ForEach(Page.allCases) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).labelsHidden().padding(.horizontal).frame(maxWidth: 640).padding(.top, 4)
             Divider().padding(.top, 8)
@@ -525,5 +527,24 @@ struct ConsoleCommand: View {
     var body: some View {
         Button(router.consoleOpen ? "Exit Console Mode" : "Console Mode") { router.consoleOpen ? router.leaveConsole() : openWindow(id: "console") }
             .keyboardShortcut("k", modifiers: [.command, .shift])
+    }
+}
+
+/// A new build's first start: macOS checks the whole app before it runs (longer the larger the game), with no window meanwhile, so the wait is explained here
+struct FirstStartNote: View {
+    let game: Game
+    @EnvironmentObject var library: Library
+    var body: some View {
+        if library.verifying.contains(game.id) {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Starting \(game.title) for the first time since it was built. macOS is checking the app first, which can take a few minutes for a large game. It opens by itself; there is no need to press Play again.")
+            }
+            .font(.callout).padding(10).frame(maxWidth: 640, alignment: .leading)
+            .background(.yellow.opacity(0.15), in: RoundedRectangle(cornerRadius: 8)).padding(.horizontal).padding(.top, 6)
+        } else if !library.running.contains(game.id) && library.isFirstStart(game) {
+            Label("First start since this build: macOS checks the app before it opens, which can take a few minutes.", systemImage: "clock")
+                .font(.callout).foregroundStyle(.secondary).frame(maxWidth: 640, alignment: .leading).padding(.horizontal).padding(.top, 6)
+        }
     }
 }
