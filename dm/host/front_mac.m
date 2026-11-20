@@ -63,11 +63,23 @@ int front_display_pixels(int *w, int *h) {
 }
 static _Atomic int g_screen_variable_refresh;
 int front_screen_variable_refresh(void) { return g_screen_variable_refresh; }
+static CGDirectDisplayID g_match_id; static CGDisplayModeRef g_match_orig;   // screen_match_apply: the screen this host switched and its own mode (defined below)
+static int g_match_pick, g_match_pick_want;   // the mode it asked for last (its IO mode ID) and the rate it was for
 static void screen_refresh(NSScreen *screen) {   // main thread: refresh capabilities of the current screen and mode, including a mode change without moving the window
     if (!screen) return;
     g_screen_fps = (int)screen.maximumFramesPerSecond;
     g_screen_id = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
     g_screen_variable_refresh = screen.minimumRefreshInterval > 0 && screen.maximumRefreshInterval > screen.minimumRefreshInterval;
+    // A screen this host switched to a fixed mode (screen_match_apply): the mode it is in says the rate and that it is fixed. NSScreen kept the variable range for a while after
+    // the switch, so the display link took frame latency 2 (variable refresh) on a DELL S2725QC at a fixed 120 Hz, and frames came late: the frame step went between 1 and 2
+    // vsyncs, 33-66 fps, choppy (Ocarina of Time started from Cartridge, Apple M6)
+    if (g_match_orig && g_screen_id == g_match_id) {
+        CGDisplayModeRef cur = CGDisplayCopyDisplayMode(g_match_id);
+        if (cur && CGDisplayModeGetIODisplayModeID(cur) != CGDisplayModeGetIODisplayModeID(g_match_orig)) {
+            g_screen_variable_refresh = 0; double hz = CGDisplayModeGetRefreshRate(cur); if (hz > 0) g_screen_fps = (int)round(hz);
+        }
+        if (cur) CGDisplayModeRelease(cur);
+    }
 }
 static _Atomic int g_fullscreen;   // the window is in fullscreen (set when it has entered and when it has left)
 // The software keyboard input box is up (front_text_input). The game window is not key then, which is not a focus change the game should see: on hardware the inline keyboard is drawn inside
@@ -111,9 +123,21 @@ static void screen_match_restore(int on_it) {   // main thread: the screen this 
     double hz = mode_hz(g_match_orig); CGError r = screen_set_mode(g_match_id, g_match_orig);
     LOG("front end: screen %s %.0f Hz", r == kCGErrorSuccess ? "back at" : "could not be switched back to", hz);
     if (r == kCGErrorSuccess && on_it) { if (hz > 0) g_screen_fps = (int)round(hz); g_screen_variable_refresh = g_match_orig_vrr; }   // the screen observer may not show the mode yet
-    CGDisplayModeRelease(g_match_orig); g_match_orig = NULL;
+    CGDisplayModeRelease(g_match_orig); g_match_orig = NULL; g_match_pick = 0;
 }
+static void screen_match_apply_now(void);
+// Not re-entered: the mode switch posts the screen's change notifications at once, and their observers (NSWindowDidChangeScreenNotification) called this again inside the
+// switch, before it had recorded the screen as switched by this host. That call read the screen's old variable-refresh flag, took the fixed mode it had just been put in for
+// the variable one and switched back, which notified again: a DELL S2725QC went 116 → 117 → 116 … up to eleven times as fullscreen started. A call that comes during a
+// switch runs once after it
 static void screen_match_apply(void) {   // main thread: on a new frame rate, on entering and leaving fullscreen and on a move to another screen
+    static int busy, again;
+    if (busy) { again = 1; return; }
+    busy = 1;
+    do { again = 0; screen_match_apply_now(); } while (again);
+    busy = 0;
+}
+static void screen_match_apply_now(void) {
     static int off = -1; if (off < 0) { const char *e = getenv("DM_SCREEN_MATCH"); off = e && !strcmp(e, "0"); if (off) LOG("front end: the screen keeps its refresh rate in fullscreen too (DM_SCREEN_MATCH=0)"); }
     NSScreen *scr = g_win.screen; int want = g_match_want, full = (g_win.styleMask & NSWindowStyleMaskFullScreen) != 0;
     CGDirectDisplayID id = scr ? [scr.deviceDescription[@"NSScreenNumber"] unsignedIntValue] : kCGNullDirectDisplay;
@@ -126,6 +150,14 @@ static void screen_match_apply(void) {   // main thread: on a new frame rate, on
     // fixed 60 Hz mode (chosen in System Settings, which took the game out of fullscreen and so got the screen's variable mode back) read as the variable mode at 60 Hz; the
     // fixed candidates then left out every 60 Hz mode and the screen went to fixed 120 Hz on each return to fullscreen (a DELL S2725QC on an Apple M6: three times in one session)
     if (!g_match_orig) screen_refresh(scr);
+    // A switch this host asked for and the screen does not show yet (it still reports its own mode): asking again switched the DELL S2725QC four times in a row as fullscreen
+    // started, each a stall. The mode asked for stands until the screen shows it
+    if (g_match_orig && g_match_pick && CGDisplayModeGetIODisplayModeID(cur) == CGDisplayModeGetIODisplayModeID(g_match_orig) && g_match_pick_want == want) { CGDisplayModeRelease(cur); return; }
+    // The screen is in the mode this host picked for this rate: nothing to do. Judged by the variable-refresh flag instead, it went back and forth between a DELL S2725QC's
+    // fixed and variable 120 Hz modes (117 and 116) eleven times as fullscreen started, and the game then ran at 50 fps with 621 late frames in 30 s
+    if (g_match_orig && g_match_pick && (int)CGDisplayModeGetIODisplayModeID(cur) == g_match_pick && g_match_pick_want == want) {
+        g_screen_variable_refresh = 0; if (hz > 0) g_screen_fps = (int)round(hz); CGDisplayModeRelease(cur); return;
+    }
     // the current mode is variable-refresh: the screen's own mode as screen_refresh saw it; one this host switched to as it chose it (the screen observer may lag), so a
     // fixed mode is never left for the variable one at a rate it already matches
     int vrr = !g_match_orig ? g_screen_variable_refresh : CGDisplayModeGetIODisplayModeID(cur) == CGDisplayModeGetIODisplayModeID(g_match_orig) ? g_match_orig_vrr : 0;
@@ -152,9 +184,11 @@ static void screen_match_apply(void) {   // main thread: on a new frame rate, on
     else if (!pick) LOG("front end: screen at %.0f Hz has no mode of this size at a multiple of %d Hz: frames are paced on the nearest refreshes", hz, want);
     else {
         CGError r = screen_set_mode(id, pick);
-        LOG("front end: %sscreen at %.0f Hz %s %s%.0f Hz for %d fps in fullscreen (DM_SCREEN_MATCH=0 keeps it)", vrr ? "variable-refresh " : "", hz, r == kCGErrorSuccess ? "switched to" : "could not be switched to", vrr ? "fixed " : "", pick_hz, want);
+        LOG("front end: %sscreen at %.0f Hz %s %s%.0f Hz for the %d Hz link in fullscreen (mode %d → %d, own mode %d; DM_SCREEN_MATCH=0 keeps it)", vrr ? "variable-refresh " : "", hz, r == kCGErrorSuccess ? "switched to" : "could not be switched to", vrr ? "fixed " : "", pick_hz, want,
+            (int)CGDisplayModeGetIODisplayModeID(cur), (int)CGDisplayModeGetIODisplayModeID(pick), g_match_orig ? (int)CGDisplayModeGetIODisplayModeID(g_match_orig) : -1);
         if (r == kCGErrorSuccess) {
             if (!g_match_orig) { g_match_orig = CGDisplayModeRetain(cur); g_match_id = id; g_match_orig_vrr = vrr; }
+            g_match_pick = (int)CGDisplayModeGetIODisplayModeID(pick); g_match_pick_want = want;
             g_screen_fps = (int)round(pick_hz);   // the screen observer may not show the new mode yet: its rate, and whether it is variable (back to the screen's own mode: as that was)
             g_screen_variable_refresh = CGDisplayModeGetIODisplayModeID(pick) == CGDisplayModeGetIODisplayModeID(g_match_orig) ? g_match_orig_vrr : vrr ? 0 : g_screen_variable_refresh;
         }

@@ -19110,7 +19110,11 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     static int l120_was; int l120 = want == 1 ? link_120() : 0;
     if (l120 != l120_was) { l120_was = l120; MLOG("display link: %s (frame %llu)", l120 == 2 ? "120 Hz with frame generation, a frame every other tick and a generated picture on the refresh between" : l120 ? "120 Hz in fullscreen on a 120 Hz-multiple screen, a frame every other tick (DM_PRESENT_LINK=1 keeps 60 Hz)" : "60 Hz again (window, another screen rate or another frame rate)", (unsigned long long)atomic_load(&g_cur_frame)); }
     if (l120) want = 2;
-    if (want) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);   // the game's rate: a variable-refresh screen goes to a fixed-rate mode at a multiple where it has one
+    // the rate the screen match asks for: the game's, or 120 where the 120 Hz link will pace a 60 fps game in fullscreen. Asked for whether or not fullscreen has been entered
+    // yet (the match acts in fullscreen only), so the request does not go from 60 to 120 as fullscreen starts: each change asked again for a mode, and a DELL S2725QC at
+    // variable 120 Hz went between its fixed and variable modes up to eleven times
+    int fs_hz = front_screen_max_fps(), m120 = want == 1 && !g_present_link_env && mtl_fps_target() == 60 && fs_hz >= 120 && fs_hz % 120 == 0;
+    if (want) front_screen_match(want == 3 ? 30 : want == 2 || m120 ? 120 : 60);   // a variable-refresh screen goes to a fixed-rate mode at a multiple where it has one
     // The screen's rate changed (switched by front_screen_match, or another screen): the range again, virtual ticks or none. Taken only once the link object exists, so a change
     // while its thread starts (after link_main read the rate) is not lost
     static int hz_was; int hz = front_screen_max_fps(); CAMetalDisplayLink *lk = g_link;
