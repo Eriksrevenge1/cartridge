@@ -73,7 +73,18 @@ static _Atomic int g_fullscreen;   // the window is in fullscreen (set when it h
 // The software keyboard input box is up (front_text_input). The game window is not key then, which is not a focus change the game should see: on hardware the inline keyboard is drawn inside
 // the game, which keeps its focus, and ShowKeyboard's applet sends its own out-of-focus / in-focus pair (DM_APPLET). Monster Hunter Rise dropped the hunter's name after the round trip and asked again. Main thread only
 static int g_text_box;
-int front_fullscreen(void) { return g_fullscreen; }   // nvn_mtl.m link_latency: frame latency 2 in variable-refresh fullscreen
+int front_fullscreen(void) { return g_fullscreen; }
+// Whether the screen is still settling at the start, so the display link waits (nvn_mtl.m link_sync): fullscreen was asked for at launch (DM_FULLSCREEN) and the window has not
+// entered it yet (at most 5 s), or this host switched a screen's mode under 1 s ago. Started before, the link ran into the switch fullscreen brings (a variable-refresh screen to a
+// fixed 120 Hz mode, about a second in): silent up to 500 ms, a rescue and a minute of frames at 20-30 fps or a black screen, as the switch fell (Ocarina of Time on a ROG
+// XG27AQNGV at variable refresh). The present thread shows the frames meanwhile, as before any link
+static _Atomic int g_fs_starting, g_match_pending; static _Atomic double g_fs_asked, g_mode_switched;
+int front_screen_settling(void) {
+    double now = CACurrentMediaTime();
+    if (g_match_pending) return 1;   // a match asked for (front_screen_match) and not applied yet: it may switch the mode
+    if (g_fs_starting && !g_fullscreen && now - g_fs_asked < 5) return 1;
+    return g_mode_switched > 0 && now - g_mode_switched < 1.0;
+}   // nvn_mtl.m link_latency: frame latency 2 in variable-refresh fullscreen
 // The screen's refresh rate matched to the game's frame rate in fullscreen (front_screen_match, from PR #79; DM_SCREEN_MATCH=0 turns it off). 60 fps on a 144 Hz screen cannot be paced
 // evenly: the display link counts a tick on the refresh nearest each 1/60 s slot (nvn_mtl.m link_range), so frames stay up 2 and 3 refreshes in turn (13.9 / 20.8 ms) and Apple's HUD shows
 // the frame interval jumping between them. In fullscreen, a screen whose rate is not a multiple of the game's switches to the mode of the same size with the highest rate that is (144 → 120 Hz
@@ -82,7 +93,7 @@ int front_fullscreen(void) { return g_fullscreen; }   // nvn_mtl.m link_latency:
 // A variable-refresh screen (ProMotion) in fullscreen switches to a fixed-rate mode of the same size at a multiple of the game's rate (120 → 60 Hz for 60 and 30 fps), though its own
 // rate is a multiple: there the display link at 60 Hz missed its targets (every present a 120 Hz refresh late and every other tick skipped, 40 fps on an M5 Pro at frame latency 2;
 // 1 → 2 → 3 vsync steps at latency 1, issue #347), and the fixed 60 Hz mode held 60.0 fps at latency 1 (docs/reference/frame-rate.md). A screen with no such mode keeps its rate, and
-// the 120 Hz link paces it (nvn_mtl.m link_vrr_120)
+// the 120 Hz link paces it (nvn_mtl.m link_120)
 static NSWindow *g_win; static _Atomic int g_match_want;   // the game's window; the frame rate to match (0 = not known yet), written by the present thread only
 static CGDirectDisplayID g_match_id; static CGDisplayModeRef g_match_orig; static int g_match_orig_vrr;   // main thread: the screen this host switched, its own mode (NULL = none switched) and whether that mode is variable-refresh
 static double mode_hz(CGDisplayModeRef m) { double hz = CGDisplayModeGetRefreshRate(m); return hz > 0 ? hz : 0; }   // 0 = not known (older built-in screens report none)
@@ -92,7 +103,9 @@ static CGError screen_set_mode(CGDirectDisplayID id, CGDisplayModeRef m) {   // 
     if (r != kCGErrorSuccess) return r;
     r = CGConfigureDisplayWithDisplayMode(cfg, id, m, NULL);
     if (r != kCGErrorSuccess) { CGCancelDisplayConfiguration(cfg); return r; }
-    return CGCompleteDisplayConfiguration(cfg, kCGConfigureForAppOnly);
+    r = CGCompleteDisplayConfiguration(cfg, kCGConfigureForAppOnly);
+    if (r == kCGErrorSuccess) g_mode_switched = CACurrentMediaTime();   // front_screen_settling
+    return r;
 }
 static void screen_match_restore(int on_it) {   // main thread: the screen this host switched gets its own mode again; on_it: the window is on that screen
     double hz = mode_hz(g_match_orig); CGError r = screen_set_mode(g_match_id, g_match_orig);
@@ -126,9 +139,14 @@ static void screen_match_apply(void) {   // main thread: on a new frame rate, on
     for (CFIndex i = 0; modes && i < CFArrayGetCount(modes); i++) {
         CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i); double r = mode_hz(m);
         if (CGDisplayModeGetWidth(m) != w || CGDisplayModeGetHeight(m) != h || CGDisplayModeGetPixelWidth(m) != pw || CGDisplayModeGetPixelHeight(m) != ph || !CGDisplayModeIsUsableForDesktopGUI(m)) continue;
-        // on a variable-refresh screen only a fixed-rate mode: not the current one, nor one at its rate (the variable mode at the screen's top rate)
-        if (vrr && (CGDisplayModeGetIODisplayModeID(m) == CGDisplayModeGetIODisplayModeID(cur) || (hz > 0 && fabs(r - hz) < 0.5))) continue;
-        if (hz_multiple(r, want) && r > pick_hz) { pick = m; pick_hz = r; }
+        // on a variable-refresh screen only a fixed-rate mode: not the current one, which is the variable mode. The screen's top rate is listed twice, the variable mode and a
+        // fixed one with its own ID (a DELL S2725QC at variable 48-120 Hz: 116 variable and 117 fixed, both 120 Hz; a ROG XG27AQNGV: 75 and 74 at 240 Hz). Leaving out
+        // every mode at that rate left out the fixed one too: the DELL then had no fixed 120 Hz mode, kept variable refresh, and the 120 Hz link there was choppy
+        if (vrr && CGDisplayModeGetIODisplayModeID(m) == CGDisplayModeGetIODisplayModeID(cur)) continue;
+        // the highest multiple, except for the 120 Hz link: 120 Hz itself where the screen has it. On a ROG XG27AQNGV the 120 Hz link held 16-21 late frames in 30 s at a
+        // fixed 120 Hz and 152 with a stall at a fixed 240 Hz (Ocarina of Time at 60 fps, Apple M6). 30 and 60 fps keep the highest (a 30 Hz mode is no choice)
+        int exact = want == 120 && fabs(r - 120) < 0.5, have_exact = want == 120 && fabs(pick_hz - 120) < 0.5;
+        if (hz_multiple(r, want) && !have_exact && (exact || r > pick_hz)) { pick = m; pick_hz = r; }
     }
     if (!pick && vrr && (hz <= 0 || hz_multiple(hz, want))) LOG("front end: variable-refresh screen at %.0f Hz has no fixed-rate mode of this size at a multiple of %d Hz: it keeps its rate", hz, want);
     else if (!pick) LOG("front end: screen at %.0f Hz has no mode of this size at a multiple of %d Hz: frames are paced on the nearest refreshes", hz, want);
@@ -146,7 +164,7 @@ static void screen_match_apply(void) {   // main thread: on a new frame rate, on
 }
 void front_screen_match(int fps) {
     if (!g_layer || g_match_want == fps) return;   // no window (a windowless run's main thread runs the guest), or the rate as before
-    g_match_want = fps; dispatch_async(dispatch_get_main_queue(), ^{ screen_match_apply(); });
+    g_match_want = fps; g_match_pending = 1; dispatch_async(dispatch_get_main_queue(), ^{ screen_match_apply(); g_match_pending = 0; });
 }
 // The pointer hides on game input while it is over the picture of the active game window (issue #675): AppKit shows it again when the mouse moves, input_release when
 // the window loses focus. The title bar, other windows and other apps keep theirs; the mouse is the touch screen (DmGameView), and moving it shows the pointer
@@ -1812,6 +1830,7 @@ void front_run(void (*guest)(void)) {
         NSApp.mainMenu = bar;
         const char *fs = getenv("DM_FULLSCREEN");   // 1 (or any value but 0): start in fullscreen; 0, the settings window's Window, or unset: a window
         if (fs && strcmp(fs, "0")) {
+            g_fs_starting = 1; g_fs_asked = CACurrentMediaTime();   // front_screen_settling: the display link waits for fullscreen
             // A game opened from a fullscreen app starts while macOS leaves that Space. Wait for activation and for the window to reach the active Space before asking for fullscreen
             // (whichever happens last), and repeat a refused startup request once. Only a request made here owns a retry; a later player request must never restart startup handling
             static DmWinDelegate *wd; wd = [DmWinDelegate new]; win.delegate = wd;
@@ -1860,7 +1879,7 @@ void front_run(void (*guest)(void)) {
         [nc addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); }];
         // Entering and leaving fullscreen: the layer is layer-backed, so its frame (and with it the drawable) follows the
         // content view by itself; only the scale factor has to be carried over to the screen the window ended up on. The screen's rate is matched in fullscreen only (screen_match_apply)
-        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); g_fullscreen = 1; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
+        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); g_fullscreen = 1; }];   // the switch first: front_screen_settling holds the link until it settles
         [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_fullscreen = 0; screen_refresh(win.screen); g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
         // DM_FOCUS_KEEP=1 (scripts/regress.py): the game stays in focus while its window is up, whichever app is active. Tears of the Kingdom stops presenting out of focus, so
         // another app taking the key window during an unattended run read as a hang (no frame after the last focus change)

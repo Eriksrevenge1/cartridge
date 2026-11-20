@@ -146,6 +146,18 @@ static void cloud_saves_folder(void) {
     if (v) CFRelease(v);
 }
 
+// The screen the game opens on (docs/frontends.md, The screen): display.screen in the app's preferences, a screen's name (or part of it) as Cartridge's settings write it,
+// becomes DM_SCREEN (front_mac.m), unless the launch environment or an env file set that. A screen not connected leaves the game on the main one
+static void display_screen(void) {
+    CFStringRef domain = CFBundleGetIdentifier(CFBundleGetMainBundle());
+    if (getenv("DM_SCREEN") || !domain) return;
+    CFPropertyListRef v = CFPreferencesCopyAppValue(CFSTR("display.screen"), domain); char s[256];
+    if (v && CFGetTypeID(v) == CFStringGetTypeID() && CFStringGetCString(v, s, sizeof s, kCFStringEncodingUTF8) && *s) {
+        setenv("DM_SCREEN", s, 1); fprintf(stderr, "launcher: screen %s (saved choice)\n", s);
+    }
+    if (v) CFRelease(v);
+}
+
 // Mods (docs/frontends.md, Mods): <sup>/mods.txt names the mods that are on, one folder of <sup>/mods per line, the first winning where two have the same file. Of each one:
 //   - romfs/ (or the folder itself when it has no romfs/, exefs/ or aoc/) becomes a DM_ROMFS_OVERLAY folder
 //   - exefs/ becomes a DM_EXEFS_PATCHES folder: its IPS and pchtxt patches are applied at load (hle_exefs.c)
@@ -247,6 +259,7 @@ int main(int argc, char **argv) {
     if (!shown) return 0;   // Quit: no game
     if (shown == 2) saved_choices();
     cloud_saves_folder();
+    display_screen();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_TEMP", temp, 0);
     // The player's controls (dm/host/controls.h): the file every game reads, then this game's own, whose lines win
     snprintf(p, sizeof p, "%s/Library/Application Support/nxnative/controls.txt:%s/controls.txt", home, getenv("DM_ROOT")); setenv("DM_CONTROLS", p, 0);
