@@ -59,6 +59,7 @@ final class ModsModel: ObservableObject {
     func toggle(_ m: Mod) {
         guard let i = mods.firstIndex(of: m) else { return }
         mods[i].on.toggle()
+        if mods[i].on { port(m.name) }
         let x = mods.remove(at: i)   // on: after the others that are on; off: among the ones that are off
         let firstOff = mods.firstIndex { !$0.on } ?? mods.count
         mods.insert(x, at: x.on ? firstOff : mods.count)
@@ -118,6 +119,29 @@ final class ModsModel: ObservableObject {
         } catch { message = "Could not install the mod: \(error.localizedDescription)" }
         reload()
         if let m = mods.first(where: { $0.name == dest.lastPathComponent }), !m.on { toggle(m) }
+    }
+    /// A game whose add-on content carries newer copies of the program's files (a Switch 2 Edition's upgrade add-on: Xenoblade Chronicles: Definitive Edition's) reads
+    /// those, so a Switch mod's files lie over copies the game never reads. scripts/mod_port.py carries the mod's change onto the add-on's copies (tables and key=value
+    /// files) into the mod's aoc/<index>/ folder, and lists what it cannot (images, layouts); run when a mod is installed or turned on, in the background
+    func port(_ name: String) {
+        let aoc = game.contents.appendingPathComponent("Resources/aoc")
+        guard ((try? FileManager.default.contentsOfDirectory(atPath: aoc.path)) ?? []).contains(where: { $0.hasSuffix(".img") }) else { return }
+        let info = Bundle.main.infoDictionary ?? [:]
+        let repo = UserDefaults.standard.string(forKey: "build.repo") ?? (info["DMRepo"] as? String ?? "")
+        let python = UserDefaults.standard.string(forKey: "build.python") ?? (info["DMPython"] as? String ?? "/usr/bin/python3")
+        let script = repo + "/scripts/mod_port.py", folder = game.modsFolder.appendingPathComponent(name).path, app = game.url.path
+        guard FileManager.default.fileExists(atPath: script) else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let (code, out) = shell(python, [script, app, folder])
+            let last = out.split(separator: "\n").last.map(String.init) ?? ""
+            let r = (try? JSONSerialization.jsonObject(with: Data(last.utf8))) as? [String: Int]
+            DispatchQueue.main.async {
+                guard code == 0, let r else { self.message = "\(name): could not be checked against this edition's files (\(last))"; return }
+                let ported = r["ported"] ?? 0, bad = r["unportable"] ?? 0
+                if ported > 0 && bad == 0 { self.message = "\(name): made for the Switch version; its changes were carried over to this edition's files (\(ported))." }
+                else if bad > 0 { self.message = "\(name): made for the Switch version. \(bad) of its files (images or layouts) are replaced by this edition and cannot be carried over, so the mod may not work or may break the picture\(ported > 0 ? "; \(ported) others were carried over" : "")." }
+            }
+        }
     }
     private func tidFolderName(_ u: URL) -> String? { u.lastPathComponent.uppercased() == game.titleID ? u.lastPathComponent : nil }
 
