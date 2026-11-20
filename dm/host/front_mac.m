@@ -217,6 +217,18 @@ static const char *pad_name(GCController *c);
 static void pads_motion_changed(GCController *gone);
 // GameController's controllers that the host reads from their HID reports instead, so they stay unread here: identical pads (pad_hid_mac.h) and original Joy-Cons (pad_jc1_mac.h)
 static int pad_gc_unread(GCController *c) { return hidpad_gc_unread(c) || jc1_gc_unread(c); }
+// View and Menu pressed together (Select and Start, − and + on a Nintendo pad): the same as a tap of Home (home_tap), for a player whose Home button the system keeps (the
+// Home button setting for apps) or who does not know the logo button is Home. While the two are held the game sees neither, so it gets at most the first one's press
+static void home_tap(void);
+static int g_chord;
+static int pad_chord(GCExtendedGamepad *g, uint64_t *m) {
+    int v = g.buttonOptions.isPressed, menu = g.buttonMenu.isPressed;
+    if (v && menu && !g_chord) { g_chord = 1; LOG("front end: View and Menu pressed together"); home_tap(); }
+    if (!g_chord) return 0;
+    if (!v && !menu) g_chord = 0;
+    *m &= ~(uint64_t)(DM_BTN_PLUS | DM_BTN_MINUS);
+    return 1;
+}
 static void pad_read(GCExtendedGamepad *g) {
     if (!g_input_on) return;
     hq_poll(); if (hq_blocks_input(g_hq.phase)) return;
@@ -231,6 +243,7 @@ static void pad_read(GCExtendedGamepad *g) {
     K(g.buttonMenu, DM_BTN_PLUS); K(g.buttonOptions, DM_BTN_MINUS); K(g.leftThumbstickButton, DM_BTN_LS); K(g.rightThumbstickButton, DM_BTN_RS);   // nil on pads without them: not pressed
     K(g.dpad.left, DM_BTN_LEFT); K(g.dpad.up, DM_BTN_UP); K(g.dpad.right, DM_BTN_RIGHT); K(g.dpad.down, DM_BTN_DOWN);
     #undef K
+    pad_chord(g, &m);
     if (p < 0) {   // DM_PAD_PRESS_TO_JOIN=1: it joins at its first button
         GCController *c = g.controller; if (!m || (p = pad_join((__bridge const void *)c, pad_name(c))) < 0) return;
         g_held[p] = c; dm_motion_attach(c, p); pads_motion_changed(nil);
@@ -568,6 +581,7 @@ static void hq_changed(hq_phase was, hq_phase now, GCController *holder) {
     NSView *cv = g_win.contentView;
     switch (now) {
     case HQ_HOLDING:
+        LOG("front end: Home pressed");
         g_hq_timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60 repeats:YES block:^(NSTimer *t) { (void)t; hq_poll(); }];
         break;
     case HQ_PROMPT: {
