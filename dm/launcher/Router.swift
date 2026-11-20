@@ -1,6 +1,6 @@
 // Links into Cartridge (its Info.plist names the cartridge scheme, scripts/build_launcher.py):
 //   cartridge://console[?game=<title ID>]  console mode, on that game: a tap of Home in a game opens it (dm/host/front_mac.m home_tap), the game going on behind it
-//   cartridge://play?game=<title ID>       plays the game (or brings it forward), for a Shortcuts "Open URL" or a link anywhere. Cartridge stays behind it: brought forward, its
+//   cartridge://play?game=<title ID>       plays the game (or brings it forward), for a link anywhere. Cartridge stays behind it: brought forward, its
 //                                          window covered the game's fullscreen space when both are on one screen
 // The app delegate takes the links, so SwiftUI opens no new library window for them; the library view hands the router its openWindow.
 import AppKit

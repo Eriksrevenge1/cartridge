@@ -58,9 +58,58 @@ final class Covers: ObservableObject {
             try? FileManager.default.createDirectory(at: g.support, withIntermediateDirectories: true)
             try? png.write(to: dst)
         } else if src == nil { try? FileManager.default.removeItem(at: dst) }
-        cache[g.id] = nil; version += 1
+        cache[g.id] = nil; accents[g.id] = nil; version += 1
+        RecentFile.write(Library.shared.games)
     }
     func hasCustom(_ g: Game) -> Bool { FileManager.default.fileExists(atPath: Covers.custom(g).path) }
+
+    /// The game page's accent, taken from its art (nil: the art is too grey to have one, so the system's accent stays)
+    func accent(_ g: Game) -> Color? {
+        if let a = accents[g.id] { return a.map { Color(nsColor: $0) } }
+        let a = Covers.accent(of: image(g))
+        accents[g.id] = .some(a)
+        return a.map { Color(nsColor: $0) }
+    }
+    private var accents: [String: NSColor?] = [:]
+
+    /// The art's most present vivid hue: the image at 48×48, each pixel weighted by its saturation times its brightness (greys and near-black count for nothing), hues in
+    /// 10° buckets, the heaviest bucket (with its neighbours) averaged. Then made dark enough for white text on it (a Play button), at least 3:1 against white (large text and controls), and kept vivid
+    static func accent(of img: NSImage) -> NSColor? {
+        let n = 48
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: n, pixelsHigh: n, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: n * 4, bitsPerPixel: 32),
+              let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = ctx
+        img.draw(in: NSRect(x: 0, y: 0, width: n, height: n), from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let px = rep.bitmapData else { return nil }
+        var weight = [Double](repeating: 0, count: 36), sum = [(Double, Double, Double)](repeating: (0, 0, 0), count: 36), total = 0.0
+        for i in 0..<(n * n) {
+            let r = Double(px[i * 4]) / 255, g = Double(px[i * 4 + 1]) / 255, b = Double(px[i * 4 + 2]) / 255, a = Double(px[i * 4 + 3]) / 255
+            guard a > 0.5 else { continue }
+            let c = NSColor(deviceRed: r, green: g, blue: b, alpha: 1)
+            let w = c.saturationComponent * c.brightnessComponent * (c.brightnessComponent > 0.15 ? 1 : 0)
+            total += 1
+            guard w > 0.05 else { continue }
+            let k = min(35, Int(c.hueComponent * 36))
+            weight[k] += w; sum[k].0 += r * w; sum[k].1 += g * w; sum[k].2 += b * w
+        }
+        // a bucket and its neighbours, so a hue on a bucket's edge is not split in two
+        func near(_ k: Int) -> Double { weight[(k + 35) % 36] + weight[k] + weight[(k + 1) % 36] }
+        let best = (0..<36).max { near($0) < near($1) }!
+        guard total > 0, near(best) / total > 0.03 else { return nil }
+        let c = NSColor(deviceRed: sum[best].0 / weight[best], green: sum[best].1 / weight[best], blue: sum[best].2 / weight[best], alpha: 1)
+        var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0
+        c.getHue(&h, saturation: &s, brightness: &v, alpha: nil)
+        s = max(s, 0.45); v = min(max(v, 0.45), 0.85)
+        func lum(_ c: NSColor) -> Double {
+            func f(_ x: CGFloat) -> Double { let x = Double(x); return x <= 0.03928 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4) }
+            return 0.2126 * f(c.redComponent) + 0.7152 * f(c.greenComponent) + 0.0722 * f(c.blueComponent)
+        }
+        var out = NSColor(deviceHue: h, saturation: s, brightness: v, alpha: 1)
+        while 1.05 / (lum(out) + 0.05) < 3 && v > 0.2 { v -= 0.02; out = NSColor(deviceHue: h, saturation: s, brightness: v, alpha: 1) }
+        return out
+    }
 }
 
 // MARK: play statistics
@@ -180,7 +229,6 @@ struct GameMenu: View {
         Button("Choose Cover…") { chooseCover(game) }
         if Covers.shared.hasCustom(game) { Button("Remove Custom Cover") { Covers.shared.setCustom(game, from: nil) } }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([game.url]) }
-        Button("Add to Siri…") { SiriShortcut.add(game: game) }.help("Adds a shortcut named “Play \(game.title)”: say it to Siri")
     }
 }
 

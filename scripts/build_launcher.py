@@ -11,7 +11,6 @@ what each game reads by itself (docs/frontends.md), so a game started from Finde
 Needs Xcode (the version README names) on a Mac with Apple silicon.
 """
 import argparse
-import json
 import plistlib
 import re
 import shutil
@@ -45,23 +44,25 @@ def sources():   # the launcher's own files, with the settings model and rows th
     return sorted(p for p in (ROOT / 'dm/launcher').glob('*.swift') if p.name != 'icon.swift') + [ROOT / 'dm/ios/Sources/LauncherSettings.swift', ROOT / 'dm/ios/Sources/LauncherRow.swift']
 
 
-# The protocols whose conformances the compiler records for App Intents (Intents.swift): Xcode's list, which the metadata processor reads the values of
-INTENT_PROTOCOLS = ['AppEntity', 'AppEnum', 'AppExtensionConfiguration', 'AppIntent', 'AppIntentsPackage', 'AppShortcutProviding', 'AppShortcutsProvider', 'AnyResolverProviding',
-                    'DynamicOptionsProvider', 'EntityQuery', 'ExtensionPointDefining', 'IntentValueQuery', 'Resolver', 'TransientEntity', 'TransientAppEntity', 'UnionValue',
-                    '_AssistantIntentsProvider', '_GenerativeFunctionExtractable', '_IntentValueRepresentable']
-
-
-def intents_metadata(res, t, consts, sdk, minos):
-    """Metadata.appintents, which makes Siri, Spotlight and Shortcuts see the app's intents: what Xcode's App Intents step writes, from the sources and the compiler's
-    constant values"""
-    t = Path(t)
-    (t / 'sources.txt').write_text(''.join(f'{p}\n' for p in sources()))
-    (t / 'consts.txt').write_text(f'{consts}\n')
-    xcode = re.search(r'Build version (\S+)', run(['xcodebuild', '-version']))
-    toolchain = Path(run(['xcrun', '--find', 'swiftc']).strip()).parents[2]
-    run(['xcrun', 'appintentsmetadataprocessor', '--output', res, '--toolchain-dir', toolchain, '--module-name', EXE, '--sdk-root', sdk,
-         '--xcode-version', xcode.group(1) if xcode else '0', '--platform-family', 'macOS', '--deployment-target', minos, '--target-triple', f'arm64-apple-macos{minos}',
-         '--source-file-list', t / 'sources.txt', '--swift-const-vals-list', t / 'consts.txt', '--force'])
+def widget(stage, t, swiftc, sdk, minos):
+    """Contents/PlugIns/CartridgeWidget.appex: the Last Played widget (dm/launcher/widget). A widget must run sandboxed; it reads what Cartridge writes for it
+    (<Application Support>/nxnative/cartridge) through a read-only exception, as no app group is available without an Apple developer team"""
+    appex = stage / 'Contents/PlugIns/CartridgeWidget.appex'
+    (appex / 'Contents/MacOS').mkdir(parents=True)
+    run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-wmo', '-swift-version', '5', '-parse-as-library', '-application-extension',
+         '-module-name', 'CartridgeWidget', '-module-cache-path', Path(t) / 'module-cache', '-o', appex / 'Contents/MacOS/CartridgeWidget',
+         *sorted((ROOT / 'dm/launcher/widget').glob('*.swift')), '-framework', 'SwiftUI', '-framework', 'WidgetKit'])
+    with open(appex / 'Contents/Info.plist', 'wb') as f:
+        plistlib.dump({
+            'CFBundleName': 'CartridgeWidget', 'CFBundleDisplayName': NAME, 'CFBundleIdentifier': f'{BUNDLE_ID}.widget', 'CFBundleExecutable': 'CartridgeWidget',
+            'CFBundlePackageType': 'XPC!', 'CFBundleShortVersionString': '1.0', 'CFBundleVersion': '1', 'CFBundleInfoDictionaryVersion': '6.0',
+            'LSMinimumSystemVersion': minos, 'NSExtension': {'NSExtensionPointIdentifier': 'com.apple.widgetkit-extension'},
+        }, f)
+    ent = Path(t) / 'widget.entitlements'
+    with open(ent, 'wb') as f:
+        plistlib.dump({'com.apple.security.app-sandbox': True,
+                       'com.apple.security.temporary-exception.files.home-relative-path.read-only': ['/Library/Application Support/nxnative/cartridge/']}, f)
+    run(['codesign', '--force', '--sign', '-', '--entitlements', ent, appex])
 
 
 def min_os():   # the Mac host's minimum macOS (dm/mac/min_os.mk)
@@ -87,13 +88,10 @@ def main():
         (stage / 'Contents/Resources').mkdir()
         icon(stage / 'Contents/Resources', t)
         print(f'build_launcher: compiling {len(sources())} Swift files for macOS {minos}')
-        consts = Path(t) / f'{EXE}.swiftconstvalues'
-        (Path(t) / 'protocols.json').write_text(json.dumps(INTENT_PROTOCOLS))
         run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-wmo', '-swift-version', '5', '-parse-as-library', '-module-name', EXE,
              '-module-cache-path', Path(t) / 'module-cache', '-o', macos / EXE, *sources(),
-             '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'GameController', '-framework', 'AppIntents',
-             '-emit-const-values-path', consts, '-Xfrontend', '-const-gather-protocols-file', '-Xfrontend', Path(t) / 'protocols.json'])
-        intents_metadata(stage / 'Contents/Resources', t, consts, sdk, minos)
+             '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'GameController', '-framework', 'IOKit', '-framework', 'WidgetKit'])
+        widget(stage, t, swiftc, sdk, minos)
         commit = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True).stdout.strip()
         with open(stage / 'Contents/Info.plist', 'wb') as f:
             plistlib.dump({

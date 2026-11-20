@@ -90,7 +90,7 @@ struct GameExit: Identifiable {
 }
 
 final class Library: ObservableObject {
-    static let shared = Library()   // the app's one library (Siri and links reach it too)
+    static let shared = Library()   // the app's one library (links reach it too)
     @Published var folders: [URL] = []
     @Published var games: [Game] = []
     @Published var running: Set<String> = []   // game ids
@@ -98,6 +98,8 @@ final class Library: ObservableObject {
     /// Games started for the first time since they were built, not yet open: macOS checks a new app's code signature over the whole bundle before it runs, which for a
     /// game of several GB can take minutes (the game page says so while it lasts)
     @Published var verifying: Set<String> = []
+    /// What the battery plan changed for each running game (Power.swift), for its page
+    @Published var batteryNote: [String: String] = [:]
     private var processes: [String: Process] = [:]
     private let store = UserDefaults.standard
 
@@ -131,7 +133,7 @@ final class Library: ObservableObject {
         }
         games = found.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         NX2AppleImport.run(games)
-        CartridgeShortcuts.updateAppShortcutParameters()   // Siri's phrases name the games
+        RecentFile.write(games)   // the widget's list
     }
 
     /// Starts the game: its own launcher, without its settings window, so this launcher's choices apply as they are saved
@@ -145,6 +147,10 @@ final class Library: ObservableObject {
         env["DM_LAUNCHER"] = "0"
         // the screen chosen in its settings (ScreenSection), for an app whose launcher does not read display.screen yet; an env file's DM_SCREEN still wins there
         if env["DM_SCREEN"] == nil, let s = UserDefaults(suiteName: g.bundleID)?.string(forKey: "display.screen"), !s.isEmpty, g.envFileValues()["DM_SCREEN"] == nil { env["DM_SCREEN"] = s }
+        let battery = BatteryPlan().overrides(for: g)   // lighter settings on battery (Power.swift)
+        env.merge(battery) { _, b in b }
+        batteryNote[g.id] = BatteryPlan.describe(battery)
+        if let d = batteryNote[g.id] { NSLog("Cartridge: %@ %@", g.title, d) }
         p.environment = env
         let started = Date()
         if isFirstStart(g) { verifying.insert(g.id) }
@@ -152,7 +158,8 @@ final class Library: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 Stats.shared.played(g, from: started)   // before running changes, so the views that redraw read the new time
-                self.running.remove(g.id); self.processes[g.id] = nil; self.verifying.remove(g.id)
+                RecentFile.write(self.games)
+                self.running.remove(g.id); self.processes[g.id] = nil; self.verifying.remove(g.id); self.batteryNote[g.id] = nil
                 let s = proc.terminationReason == .uncaughtSignal ? 128 + proc.terminationStatus : proc.terminationStatus
                 if s != 0 { self.lastExit = GameExit(game: g, status: s) }
                 NSApp.activate(ignoringOtherApps: true)

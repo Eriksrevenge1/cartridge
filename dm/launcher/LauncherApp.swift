@@ -14,9 +14,10 @@ struct LauncherApp: App {
     @StateObject private var builder = Builder()
     @StateObject private var devices = Devices()
     @AppStorage("appearance") private var appearance: Appearance = .system
+    @AppStorage("menuBar") private var menuBar = true
 
     var body: some Scene {
-        WindowGroup("Cartridge") {
+        WindowGroup("Cartridge", id: "library") {
             LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder)
                 .frame(minWidth: 860, minHeight: 560)
                 .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder; appearance.apply() }
@@ -29,7 +30,6 @@ struct LauncherApp: App {
             }
             CommandGroup(after: .sidebar) {
                 ConsoleCommand()
-                Button("Add Console Mode to Siri…") { SiriShortcut.addConsole() }
             }
         }
         Window("Console Mode", id: "console") {
@@ -44,10 +44,14 @@ struct LauncherApp: App {
             DevicesView().environmentObject(devices).frame(minWidth: 780, minHeight: 480)
                 .onAppear { devices.builder = builder }
         }
+        MenuBarExtra("Cartridge", systemImage: "gamecontroller.fill", isInserted: $menuBar) {
+            MenuBarMenu().environmentObject(library)
+        }
         Settings {
             TabView {
                 FoldersView().environmentObject(library).tabItem { Label("Library", systemImage: "books.vertical") }
                 BuildSettingsView().environmentObject(builder).tabItem { Label("Building", systemImage: "hammer") }
+                BatterySettingsView().tabItem { Label("Battery", systemImage: "battery.75percent") }
             }
             .frame(width: 560, height: 400)
         }
@@ -187,8 +191,10 @@ struct GameView: View {
     @EnvironmentObject var library: Library
     @EnvironmentObject var builder: Builder
     @Environment(\.openWindow) private var openWindow
+    @ObservedObject private var covers = Covers.shared
 
     var body: some View {
+        let _ = covers.version
         VStack(spacing: 0) {
             GameHeader(game: game) {
                 Menu {
@@ -206,7 +212,12 @@ struct GameView: View {
                         .controlSize(.large).buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: [.command])
                 }
             }
+            HealthLine(game: game)
             FirstStartNote(game: game)
+            if let n = library.batteryNote[game.id] {
+                Label(n, systemImage: "battery.50percent").font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: 640, alignment: .leading).padding(.horizontal).padding(.top, 6)
+            }
             Picker("", selection: $page) { ForEach(Page.allCases) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).labelsHidden().padding(.horizontal).frame(maxWidth: 640).padding(.top, 4)
             Divider().padding(.top, 8)
@@ -219,6 +230,7 @@ struct GameView: View {
             case .screenshots: ScreenshotsView(game: game)
             }
         }
+        .tint(covers.accent(game))   // the page's colour, from the game's art
     }
 }
 
@@ -361,10 +373,12 @@ struct SavesView: View {
 struct FoldersView: View {
     @EnvironmentObject var library: Library
     @AppStorage("appearance") private var appearance: Appearance = .system
+    @AppStorage("menuBar") private var menuBar = true
     @State private var pick: URL?
     var body: some View {
         VStack(alignment: .leading) {
             Picker("Appearance", selection: $appearance) { ForEach(Appearance.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(maxWidth: 320)
+            Toggle("Show Cartridge in the menu bar (recent games, console mode)", isOn: $menuBar)
             Divider().padding(.vertical, 4)
             Text("Library folders").font(.headline)
             Text("nxnative Mac apps in these folders (and three levels of subfolders) appear in the library.").font(.footnote).foregroundStyle(.secondary)
