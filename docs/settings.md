@@ -70,6 +70,10 @@ Experimental. Mac only, off by default, and only at a 60 fps **Frame rate** (it 
 - **When it does nothing:** on a 60 Hz screen at 60 fps (no refresh between frames to show a picture on), and without the display link.
 - **Turn it on:** **Frame generation** in the settings window, or `DM_FRAMEGEN=1` in the game's `env.txt`.
 
+### HDR
+
+On by default. Switch games draw a standard (SDR) picture. On a screen with HDR turned on (an HDR monitor in its HDR mode, a MacBook Pro's or Pro Display XDR's screen, or an iPhone's or iPad's HDR screen), the app lifts the picture's bright parts above normal white into the screen's HDR range: the sky, light, fire and magic glow, while the rest stays as the game drew it. The screen's own HDR brightness sets how far, at most 2.5 times normal white (`DM_HDR_PEAK` in `env.txt` changes the limit). On a screen without HDR nothing changes. Off keeps the standard picture everywhere. Frame generation and an iPhone's or iPad's Low Power Mode keep the standard picture.
+
 ### Game's upscaler
 
 Shown only for games that upscale their own picture with a network of their own before the app sees it: agl's NDSR network, in Donkey Kong Bananza and Splatoon Raiders. **Game's own**, the default, keeps the game's upscaler. **MetalFX** replaces it with Apple's MetalFX spatial scaler: the same input and output sizes, at a fraction of the GPU time, but Apple's scaler's picture rather than the game's.

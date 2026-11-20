@@ -20,6 +20,7 @@ DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Game	Render scale		le
 DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode		level=basic
 DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX	off	always	Game	Upscaling	Uses more GPU time and can increase heat.
 DM_FRAMEGEN	toggle	-	0	platform:mac	Game	Frame generation (experimental)	Shows a frame between each two the game draws: 60 → 120 fps on a 120 Hz screen. Fast motion shows artifacts; adds one screen refresh of latency.	needs=DM_FPS_TARGET=60
+DM_HDR	toggle	-	1	always	Game	HDR	On a screen with HDR turned on, lifts the game's bright parts into the screen's HDR range. Not with frame generation or in Low Power Mode.
 DM_UPSCALER	choice	game=Game's own,metalfx=MetalFX	game	DM_GAME_UPSCALER_N!=0	Game	Game's upscaler
 DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language		level=basic
 DM_FULLSCREEN	choice	0=Window,1=Fullscreen	0	platform:mac	Game	Display mode		level=basic
