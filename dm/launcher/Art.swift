@@ -180,6 +180,7 @@ struct GameMenu: View {
         Button("Choose Cover…") { chooseCover(game) }
         if Covers.shared.hasCustom(game) { Button("Remove Custom Cover") { Covers.shared.setCustom(game, from: nil) } }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([game.url]) }
+        Button("Add to Siri…") { SiriShortcut.add(game: game) }.help("Adds a shortcut named “Play \(game.title)”: say it to Siri")
     }
 }
 

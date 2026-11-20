@@ -1,7 +1,7 @@
 // Console mode: the library full screen for the couch, driven by a controller or the keyboard. A row of game tiles over the chosen game's art, its name and play time,
 // and the buttons' meanings at the bottom. Left and right (D-pad, stick, arrow keys) choose, A or Return plays, B or Escape leaves. It opens from the toolbar, View ›
 // Console Mode (⇧⌘K) or a controller's Menu button in the library, and while it is open the controller drives it alone (GamepadNav routes to the front handlers). It leaves
-// by B, Escape, ⇧⌘K again or its Exit button.
+// by B, Escape, ⇧⌘K again or its Exit button. Home (the controller's logo button) goes back to the game that is running.
 import AppKit
 import SwiftUI
 
@@ -60,7 +60,7 @@ struct ConsoleView: View {
         .focusable().focused($focused).focusEffectDisabled()
         .onAppear {
             focused = true
-            pad.push(GamepadNav.Route(move: { _ in }, moveX: move, page: { _ in }, play: play, back: leave, menu: leave))
+            pad.push(GamepadNav.Route(move: { _ in }, moveX: move, page: { _ in }, play: play, back: leave, menu: leave, home: resume))
             takeFocus()
             fullScreen()
             router.consoleOpen = true; router.leaveConsole = leave
@@ -144,6 +144,7 @@ struct ConsoleView: View {
             hint("a.circle.fill", current.map { isRunning($0) ? "Resume" : "Play" } ?? "Play")
             Button(action: leave) { hint("b.circle.fill", "Back (Esc)") }.buttonStyle(.plain)
             hint("arrow.left.and.right.circle.fill", "Choose")
+            if games.contains(where: isRunning) { hint("house.circle.fill", "Back to Game") }
         }
         .font(.title3).foregroundStyle(.white.opacity(0.85))
     }
@@ -151,6 +152,10 @@ struct ConsoleView: View {
 
     private func move(_ d: Int) { guard !games.isEmpty else { return }; index = max(0, min(games.count - 1, index + d)) }
     private func play() { if let g = current { library.play(g) } }
+    /// Home: back to the game that is running (the chosen one if it is, else the first), as Home on a console returns to its game; nothing when none is
+    private func resume() {
+        if let g = current, isRunning(g) { library.play(g) } else if let g = games.first(where: isRunning) { library.play(g) }
+    }
     /// The console's window: SwiftUI names it after the scene's title
     private var window: NSWindow? { NSApp.windows.first { $0.title == "Console Mode" && $0.isVisible } }
     private func leave() {

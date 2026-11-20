@@ -27,7 +27,10 @@ struct LauncherApp: App {
                 Button("Add Folder to Library…") { addFolder(library) }.keyboardShortcut("o")
                 Button("Refresh Library") { library.scan() }.keyboardShortcut("r")
             }
-            CommandGroup(after: .sidebar) { ConsoleCommand() }
+            CommandGroup(after: .sidebar) {
+                ConsoleCommand()
+                Button("Add Console Mode to Siri…") { SiriShortcut.addConsole() }
+            }
         }
         Window("Console Mode", id: "console") {
             ConsoleView().environmentObject(library).environmentObject(pad).frame(minWidth: 900, minHeight: 560)
@@ -172,7 +175,8 @@ struct LibraryView: View {
             },
             play: { if let g = selected { library.play(g) } },
             back: { selection = homeID },
-            menu: { openWindow(id: "console") }))
+            menu: { openWindow(id: "console") },
+            home: { openWindow(id: "console") }))
     }
 }
 
@@ -320,8 +324,9 @@ struct FoldersView: View {
     }
 }
 
-/// A controller in the launcher (GameController): the D-pad or the left stick moves, A plays, B goes back, L and R change the page, Menu opens console mode. Only while this
-/// app is active: the game, another app, reads its controllers itself. The front route gets the presses: the library's, or console mode's while it is open
+/// A controller in the launcher (GameController): the D-pad or the left stick moves, A plays, B goes back, L and R change the page, Menu opens console mode, Home (the logo
+/// button) opens console mode or, in it, goes back to the game that is running. Only while this app is active: the game, another app, reads its controllers itself. The front
+/// route gets the presses: the library's, or console mode's while it is open
 final class GamepadNav: ObservableObject {
     struct Route {
         var move: (Int) -> Void = { _ in }
@@ -330,6 +335,7 @@ final class GamepadNav: ObservableObject {
         var play: () -> Void = {}
         var back: () -> Void = {}
         var menu: () -> Void = {}
+        var home: () -> Void = {}
     }
     private var routes: [Route] = []
     private var base = Route()
@@ -357,11 +363,12 @@ final class GamepadNav: ObservableObject {
         press(g.dpad.left) { $0.moveX(-1) }; press(g.dpad.right) { $0.moveX(1) }
         press(g.leftShoulder) { $0.page(-1) }; press(g.rightShoulder) { $0.page(1) }
         press(g.buttonMenu) { $0.menu() }
-        // A and B as the host reads them (pad_apple.h): by position, the right and the bottom face buttons, which GameController names buttonB and buttonA on most pads and
-        // buttonA and buttonB on a Nintendo one (by its labels)
-        let labelled = c.productCategory == "Switch Pro Controller" || c.productCategory.contains("Joy-Con")
-        press(labelled ? g.buttonA : g.buttonB) { $0.play() }
-        press(labelled ? g.buttonB : g.buttonA) { $0.back() }
+        // Home: claimed from the system (which would open the Games app), as the host does in a game (front_mac.m pad_keep_system_buttons)
+        if let h = c.physicalInputProfile.buttons[GCInputButtonHome] { h.preferredSystemGestureState = .disabled; press(h) { $0.home() } }
+        // A and B by their labels, as macOS's own controller navigation and the host's Home prompt read them: A (the bottom button on an Xbox or PlayStation pad, the
+        // right one on a Nintendo pad) plays, B goes back. GameController names a Nintendo pad's buttons by their labels too
+        press(g.buttonA) { $0.play() }
+        press(g.buttonB) { $0.back() }
         let id = ObjectIdentifier(c)
         g.leftThumbstick.yAxis.valueChangedHandler = { [weak self] _, v in
             guard let self else { return }

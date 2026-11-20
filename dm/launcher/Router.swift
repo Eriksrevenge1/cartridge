@@ -21,10 +21,15 @@ final class Router: ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
         switch u.host?.lowercased() {
         case "console": focus = game; showConsole()
-        case "play":
-            if let game, let g = Library.shared.games.first(where: { $0.titleID == game }) { Library.shared.play(g) }
+        case "play": if let game { play(game) }
         default: NSLog("Cartridge: unknown link %@", u.absoluteString)
         }
+    }
+    /// A link can start Cartridge: the library may still be scanning, so the game is looked for again for a few seconds
+    private func play(_ tid: String, tries: Int = 20) {
+        if let g = Library.shared.games.first(where: { $0.titleID == tid }) { Library.shared.play(g); return }
+        if tries > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.play(tid, tries: tries - 1) } }
+        else { NSLog("Cartridge: no game %@ in the library", tid) }
     }
     func showConsole() {
         if consoleOpen { NSApp.windows.first { $0.title == "Console Mode" }?.makeKeyAndOrderFront(nil); return }
