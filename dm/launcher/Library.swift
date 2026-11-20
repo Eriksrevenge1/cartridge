@@ -193,7 +193,7 @@ final class Library: ObservableObject {
 }
 
 /// The settings list as nxnative has it now (dm/games/settings.tsv in the repository Cartridge was built from): each row's label, note and needs replace those an app was
-/// packed with, so a reworded setting or a new dependency (Frame generation only at 60 fps) shows without rebuilding every game. Which rows a game has, their values and
+/// packed with, so a reworded setting or a new dependency (a new setting's note) shows without rebuilding every game. Which rows a game has, their values and
 /// defaults stay the app's own: those depend on the game and on what its host can take
 final class RepoSettings {
     static let shared = RepoSettings()

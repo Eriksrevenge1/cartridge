@@ -60,19 +60,9 @@ Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its worl
 - **Cost:** more GPU time each frame, which can increase heat on an iPhone. [Breath of the Wild's measurements](../dm/games/01007EF00011E000/README.md#upscaling-current) cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Nothing changes while the game's picture is as large as the screen. Unsupported devices and sizes use Standard scaling.
 - **On the Mac:** choose **MetalFX** under **Upscaling** in the [settings window](#the-mac-settings-window)'s Advanced settings, or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
 
-### Frame generation
-
-Experimental. Mac only, off by default, and only at a 60 fps **Frame rate** (it is hidden at 30). On a screen at 120 Hz or a multiple of it, the app draws a frame halfway between each two the game draws and shows it on the refresh in between: 60 → 120 fps on screen. The game itself runs no faster.
-
-- **How:** the app estimates the motion between the game's last two pictures on the GPU and blends them along it. Games hand over no motion vectors, which MetalFX's own frame interpolator needs. At 60 fps the display link runs at 120 Hz for it, in a window too.
-- **Cost:** the game's own frame reaches the screen one refresh later (8.3 ms at 120 Hz), the generated picture taking its place. GPU time is small: on an Apple M6, Ocarina of Time at 2560x1440 showed 119-120 pictures a second at 60 fps, the whole present (motion estimate, blend and present pass) about 0.5 ms a picture. Fast motion shows artifacts: sprinting through Hyrule Field's grass in Ocarina of Time, the generated pictures smeared and tore at 60 → 120 as at 30 → 60 (judged by the player, 2026-11-19), where the motion estimate loses track. Better motion estimates are the open work.
-- **Why not at 30 fps:** frames 33 ms apart move too far between them when the camera turns or the character sprints, and the motion estimate loses track: in Hyrule Field the ground smeared and tore. `DM_FRAMEGEN=2` in `env.txt` forces it at 30 anyway.
-- **When it does nothing:** on a 60 Hz screen at 60 fps (no refresh between frames to show a picture on), and without the display link.
-- **Turn it on:** **Frame generation** in the settings window, or `DM_FRAMEGEN=1` in the game's `env.txt`.
-
 ### HDR
 
-On by default. Switch games draw a standard (SDR) picture. On a screen with HDR turned on (an HDR monitor in its HDR mode, a MacBook Pro's or Pro Display XDR's screen, or an iPhone's or iPad's HDR screen), the app lifts the picture's bright parts above normal white into the screen's HDR range: the sky, light, fire and magic glow, while the rest stays as the game drew it. The screen's own HDR brightness sets how far, at most 2.5 times normal white (`DM_HDR_PEAK` in `env.txt` changes the limit). On a screen without HDR nothing changes. Off keeps the standard picture everywhere. Frame generation and an iPhone's or iPad's Low Power Mode keep the standard picture.
+On by default. Switch games draw a standard (SDR) picture. On a screen with HDR turned on (an HDR monitor in its HDR mode, a MacBook Pro's or Pro Display XDR's screen, or an iPhone's or iPad's HDR screen), the app lifts the picture's bright parts above normal white into the screen's HDR range: the sky, light, fire and magic glow, while the rest stays as the game drew it. The screen's own HDR brightness sets how far, at most 2.5 times normal white (`DM_HDR_PEAK` in `env.txt` changes the limit). On a screen without HDR nothing changes. Off keeps the standard picture everywhere. An iPhone's or iPad's Low Power Mode keeps the standard picture.
 
 ### Game's upscaler
 
@@ -300,7 +290,6 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Press a button to join | `DM_PAD_PRESS_TO_JOIN` | `1`, `0` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | Game's upscaler | `DM_UPSCALER` | `game`, `metalfx` |
-| Frame generation | `DM_FRAMEGEN` | `1`, `0`, `2` at any frame rate (Mac) |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |

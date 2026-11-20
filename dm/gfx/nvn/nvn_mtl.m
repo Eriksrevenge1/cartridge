@@ -18144,11 +18144,12 @@ static void present_pipeline(MTLPixelFormat format) {
         if (!lib) MDIE("present shader compile failed %s", e.localizedDescription.UTF8String);
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
         pd.vertexFunction = [lib newFunctionWithName:@"vs"];
-        if (peak > 0) {
-            MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new]; [cv setConstantValue:&peak type:MTLDataTypeFloat atIndex:0];
-            pd.fragmentFunction = [lib newFunctionWithName:@"fs" constantValues:cv error:&e];
-            if (!pd.fragmentFunction) MDIE("present HDR shader failed %s", e.localizedDescription.UTF8String);
-        } else pd.fragmentFunction = [lib newFunctionWithName:@"fs"];
+        // A function with a function constant takes its values even when none is set (SDR: hdr_peak left undefined): one made by name alone failed Metal's pipeline
+        // validation and aborted every game on an SDR screen (2ae76809)
+        MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
+        if (peak > 0) [cv setConstantValue:&peak type:MTLDataTypeFloat atIndex:0];
+        pd.fragmentFunction = [lib newFunctionWithName:@"fs" constantValues:cv error:&e];
+        if (!pd.fragmentFunction) MDIE("present shader specialisation failed %s", e.localizedDescription.UTF8String);
         pd.colorAttachments[0].pixelFormat = format;
         g_blit_pso = dev_rps(pd, &e);
         if (!g_blit_pso) MDIE("present pipeline failed %s", e.localizedDescription.UTF8String);
@@ -18616,113 +18617,6 @@ static void present_gpu_note(double s, int fx) {
     MLOG("present command buffer GPU time over 600 presents %s: p50 %.3f ms, p95 %.3f ms, max %.3f ms", fx ? "through MetalFX" : "through the bilinear pass", a[299], a[569], a[599]);
     n[fx] = 0;
 }
-// ---------- Frame generation (DM_FRAMEGEN=1) ----------
-// A game whose frames each stay on screen for two refreshes or more (30 fps on a 60 Hz screen, 60 fps on a 120 Hz one) shows, on the first refresh of each new frame, a picture
-// halfway between it and the frame before, and the frame itself on the next: twice the motion on screen for one refresh more of latency. Only on the display link, whose ticks
-// are the refreshes (the callback below): a new frame's tick presents the generated picture (g_fg_mode 1, fg_encode in present_now) and keeps the frame for the next tick
-// (g_fg_pending), which shows it (g_fg_mode 2) instead of standing idle in the hold. Games hand the present neither motion vectors nor depth, which MetalFX's frame interpolator
-// needs, so the motion is estimated from the two pictures (dm/gfx/msl/fg.metal: block matching on 1/16 and 1/4 luma, then a motion-compensated blend that keeps the current
-// frame where the two disagree). The game's picture is copied first: the second refresh shows the copy, as the game may draw into its own texture again by then.
-// All of it is on the thread that presents (the display link's), one present at a time
-static int g_fg_on = -1;
-// Only at a 60 fps target (60 → 120 on a 120 Hz screen): at 30 the game's frames are 33 ms apart, and while the camera turns or Link sprints the motion between them is more than the
-// block matching follows, so the picture between smeared and tore (Ocarina of Time in Hyrule Field, 2026-11-19: the player judged 30 → 60 not usable, 60 → 120 good). DM_FRAMEGEN=2 forces
-// it at 30 too (for work on the motion estimate). The target can change while the game runs (a movie lifts 30 to 60), so it is read on each call
-static int g_fg_force;
-static int fg_enabled(void) {
-    if (g_fg_on < 0) { const char *e = getenv("DM_FRAMEGEN"); g_fg_on = e && atoi(e) > 0; g_fg_force = e && atoi(e) == 2;
-        MLOG("frame generation (DM_FRAMEGEN): %s", !g_fg_on ? "off" : g_fg_force ? "on at any frame rate (DM_FRAMEGEN=2): a frame halfway between each two, where each frame stays up two refreshes or more (display link only)"
-             : "on at 60 fps: a frame halfway between each two, on the refresh between them (display link only; not at a 30 fps target)"); }
-    return g_fg_on && (g_fg_force || mtl_fps_target() >= 60);
-}
-static struct { __strong id<MTLTexture> frame[2], lq[2], ls[2], fs, fq, out; NSUInteger w, h; MTLPixelFormat pf; int cur, have_prev; uint64_t made, shown; } g_fgen;
-static id<MTLRenderPipelineState> g_fg_copy, g_fg_luma, g_fg_coarse, g_fg_fine, g_fg_synth; static MTLPixelFormat g_fg_ppf; static int g_fg_broken;
-static id<MTL4ArgumentTable> g_fg_args; static id<MTLBuffer> g_fg_params;   // params: 3 slots (the present's allocator index) of 256 bytes, 32 per pass
-static int g_fg_mode;   // present_now: 0 the game's frame, 1 generate the picture before it (fg_encode), 2 the copy of the last frame (the refresh after a generated picture)
-static int g_fg_made;   // present_now with mode 1 presented a generated picture
-static int g_fg_pending; static tex_t g_fg_t; static uint64_t g_fg_frame, g_fg_ticket; static int g_fg_crop[4];   // display link thread: the next tick shows the last frame's copy (its item's texture, frame, ticket and crop)
-static id<MTLRenderPipelineState> fg_pso(id<MTLLibrary> lib, NSString *fn, MTLPixelFormat pf) {
-    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-    pd.vertexFunction = [lib newFunctionWithName:@"fg_vs"]; pd.fragmentFunction = [lib newFunctionWithName:fn]; pd.colorAttachments[0].pixelFormat = pf;
-    NSError *e = nil; id<MTLRenderPipelineState> p = pd.fragmentFunction ? dev_rps(pd, &e) : nil;
-    if (!p) MLOG("[RED] frame generation: no pipeline for %s (format %lu): %s", fn.UTF8String, (unsigned long)pf, e.localizedDescription.UTF8String ?: "no function");
-    return p;
-}
-static id<MTLTexture> fg_tex(MTLPixelFormat pf, NSUInteger w, NSUInteger h, NSString *label) {
-    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w ? w : 1 height:h ? h : 1 mipmapped:NO];
-    td.storageMode = MTLStorageModePrivate; td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-    id<MTLTexture> t = [g_dev newTextureWithDescriptor:td]; if (t) { t.label = label; res_add(t); }
-    return t;
-}
-// Pipelines for the picture's format and textures for its size, made again when either changes (after the presents still on the GPU, which may read the old ones)
-static int fg_ready(id<MTLTexture> raw) {
-    if (g_fg_broken) return 0;
-    MTLPixelFormat pf = raw.pixelFormat; NSUInteger w = raw.width, h = raw.height;
-    if (!g_fg_args) {
-        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 3; ad.maxSamplerStateBindCount = 1; ad.maxBufferBindCount = 1;
-        NSError *e = nil; g_fg_args = [g_dev newArgumentTableWithDescriptor:ad error:&e];
-        g_fg_params = [g_dev newBufferWithLength:3 * 256 options:MTLResourceStorageModeShared];
-        if (!g_fg_args || !g_fg_params) { MLOG("[RED] frame generation: no argument table or parameter buffer; off"); g_fg_broken = 1; return 0; }
-        res_add(g_fg_params);
-    }
-    if (!g_fg_copy || g_fg_ppf != pf) {
-        NSError *e = nil; id<MTLLibrary> lib = host_lib("fg", &e);
-        if (!lib) { MLOG("[RED] frame generation: no shader library: %s; off", e.localizedDescription.UTF8String); g_fg_broken = 1; return 0; }
-        g_fg_copy = fg_pso(lib, @"fg_copy", pf); g_fg_synth = fg_pso(lib, @"fg_synth", pf);
-        if (!g_fg_luma) { g_fg_luma = fg_pso(lib, @"fg_luma", MTLPixelFormatR16Float); g_fg_coarse = fg_pso(lib, @"fg_flow_coarse", MTLPixelFormatRG16Float); g_fg_fine = fg_pso(lib, @"fg_flow_fine", MTLPixelFormatRG16Float); }
-        if (!g_fg_copy || !g_fg_synth || !g_fg_luma || !g_fg_coarse || !g_fg_fine) { MLOG("[RED] frame generation: off (format %lu)", (unsigned long)pf); g_fg_broken = 1; return 0; }
-        g_fg_ppf = pf;
-    }
-    if (g_fgen.frame[0] && g_fgen.w == w && g_fgen.h == h && g_fgen.pf == pf) return 1;
-    pthread_mutex_lock(&g_pq_mu); while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);
-    for (int i = 0; i < 2; i++) { res_remove(g_fgen.frame[i]); res_remove(g_fgen.lq[i]); res_remove(g_fgen.ls[i]); }
-    res_remove(g_fgen.fs); res_remove(g_fgen.fq); res_remove(g_fgen.out);
-    NSUInteger qw = (w + 3) / 4, qh = (h + 3) / 4, sw = (qw + 3) / 4, sh = (qh + 3) / 4;
-    for (int i = 0; i < 2; i++) { g_fgen.frame[i] = fg_tex(pf, w, h, @"fg frame"); g_fgen.lq[i] = fg_tex(MTLPixelFormatR16Float, qw, qh, @"fg luma 1/4"); g_fgen.ls[i] = fg_tex(MTLPixelFormatR16Float, sw, sh, @"fg luma 1/16"); }
-    g_fgen.fs = fg_tex(MTLPixelFormatRG16Float, sw, sh, @"fg motion 1/16"); g_fgen.fq = fg_tex(MTLPixelFormatRG16Float, qw, qh, @"fg motion 1/4"); g_fgen.out = fg_tex(pf, w, h, @"fg picture");
-    res_commit();
-    if (!g_fgen.frame[0] || !g_fgen.frame[1] || !g_fgen.lq[0] || !g_fgen.lq[1] || !g_fgen.ls[0] || !g_fgen.ls[1] || !g_fgen.fs || !g_fgen.fq || !g_fgen.out) {
-        MLOG("[RED] frame generation: cannot create its textures (%lux%lu format %lu); off", (unsigned long)w, (unsigned long)h, (unsigned long)pf); g_fg_broken = 1; return 0; }
-    g_fgen.w = w; g_fgen.h = h; g_fgen.pf = pf; g_fgen.have_prev = 0;
-    MLOG("frame generation: %lux%lu format %lu, motion estimated at %lux%lu and %lux%lu", (unsigned long)w, (unsigned long)h, (unsigned long)pf, (unsigned long)sw, (unsigned long)sh, (unsigned long)qw, (unsigned long)qh);
-    return 1;
-}
-// One full-screen pass into dst, reading up to three textures and the parameters at params slot / pass
-static void fg_pass(id<MTL4CommandBuffer> cb, id<MTLRenderPipelineState> pso, id<MTLTexture> dst, id<MTLTexture> t0, id<MTLTexture> t1, id<MTLTexture> t2, int slot, int pass, const void *p, size_t n) {
-    MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new];
-    rp.colorAttachments[0].texture = dst; rp.colorAttachments[0].loadAction = MTLLoadActionDontCare; rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-    id<MTL4RenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
-    if (!en) { RED_ONCE(70, "frame generation: no render encoder"); return; }
-    [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()];
-    [en setArgumentTable:g_fg_args atStages:MTLRenderStageFragment];
-    id<MTLTexture> ts[3] = {t0, t1, t2};
-    for (int i = 0; i < 3; i++) if (ts[i]) [g_fg_args setTexture:ts[i].gpuResourceID atIndex:i];
-    [g_fg_args setSamplerState:g_blit_samp.gpuResourceID atIndex:0];
-    size_t off = (size_t)slot * 256 + (size_t)pass * 32;
-    if (p && n <= 32) { memcpy((uint8_t *)g_fg_params.contents + off, p, n); at_addr(g_fg_args, g_fg_params.gpuAddress + off, 0, "frame generation parameters", 1); }
-    [en setRenderPipelineState:pso];
-    [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-    m4_end(en);
-}
-// Encodes the copy of the game's picture and, when there is a frame before it of the same size, the picture halfway (returned); nil: present the game's picture as it is
-static id<MTLTexture> fg_encode(id<MTL4CommandBuffer> cb, id<MTLTexture> src, int slot) {
-    id<MTLTexture> raw = present_raw_src(src);
-    if (!fg_ready(raw)) return nil;
-    int c = g_fgen.cur ^ 1, p = g_fgen.cur;
-    struct { float o[2], pad[2]; } lq = {{1.f / g_fgen.w, 1.f / g_fgen.h}, {0}}, ls = {{1.f / g_fgen.lq[0].width, 1.f / g_fgen.lq[0].height}, {0}};
-    fg_pass(cb, g_fg_copy, g_fgen.frame[c], raw, nil, nil, slot, 0, NULL, 0);
-    fg_pass(cb, g_fg_luma, g_fgen.lq[c], g_fgen.frame[c], nil, nil, slot, 1, &lq, sizeof lq);
-    fg_pass(cb, g_fg_luma, g_fgen.ls[c], g_fgen.lq[c], nil, nil, slot, 2, &ls, sizeof ls);
-    g_fgen.cur = c;
-    if (!g_fgen.have_prev) { g_fgen.have_prev = 1; return nil; }
-    struct { int32_t r; float bias; int32_t pad[2]; } coarse = {6, 0.02f, {0}}, fine = {1, 0.01f, {0}};
-    struct { float inv[2], scale, pad; } sy = {{1.f / g_fgen.w, 1.f / g_fgen.h}, 4.f, 0};
-    fg_pass(cb, g_fg_coarse, g_fgen.fs, g_fgen.ls[c], g_fgen.ls[p], nil, slot, 3, &coarse, sizeof coarse);
-    fg_pass(cb, g_fg_fine, g_fgen.fq, g_fgen.lq[c], g_fgen.lq[p], g_fgen.fs, slot, 4, &fine, sizeof fine);
-    fg_pass(cb, g_fg_synth, g_fgen.out, g_fgen.frame[c], g_fgen.frame[p], g_fgen.fq, slot, 5, &sy, sizeof sy);
-    if (!g_fgen.made++) MLOG("frame generation: first generated picture (present #%llu)", (unsigned long long)g_present_n);
-    return g_fgen.out;
-}
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
@@ -18736,7 +18630,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
              g_up_total_ns / 1e6, g_bp_first_present / 1e9);
     }
     PD("X ser=%llu", t->serial);
-    id<MTLTexture> src = g_fg_mode == 2 ? g_fgen.frame[g_fgen.cur] : tex_mtl(t);   // frame generation's second refresh: the copy of the frame (the game's texture may hold a newer one)
+    id<MTLTexture> src = tex_mtl(t);
     if (!src) { RED_ONCE(8, "present texture could not get an MTLTexture"); return 0; }
     // The picture's shape for the front end's layout (front.h front_picture_shape): reported when its width / height changes by more than 0.1 %, not on a size change of the same
     // shape (1280x720 handheld, 1920x1080 docked)
@@ -18802,10 +18696,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [g_q4 waitForDrawable:dr];
     id<MTL4CommandBuffer> cb = g_present_cb[alloc_i];
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
-    id<MTLTexture> show = src;   // frame generation's first refresh of a new frame: the picture halfway to it (fg_encode)
-    g_fg_made = 0;
-    if (g_fg_mode == 1) { id<MTLTexture> mid = fg_encode(cb, src, alloc_i); if (mid) { show = mid; g_fg_made = 1; } }
-    int kind = present_encode_m4(cb, show, dr.texture, crop, g_present_uv[alloc_i], &g_fx_present);
+    int kind = present_encode_m4(cb, src, dr.texture, crop, g_present_uv[alloc_i], &g_fx_present);
     id<MTLResidencySet> drs = ((CAMetalLayer *)dr.layer).residencySet;   // the drawable's
     if (!kind) { cb_end(cb, drs); [g_q4 signalDrawable:dr]; return 0; }
     int fx_kind = kind == PRESENT_METALFX;
@@ -18841,7 +18732,6 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 #if TARGET_OS_SIMULATOR   // The iOS simulator SDK has no presentation-time callback and no minimum display duration (used only for picture acceptance, display-link ticks are not counted)
     (void)period; [dr present];
 #else
-    if (g_fg_mode == 2) { [dr present]; return 1; }   // the frame's second refresh after a generated picture: its present time is the generated one's (the frame's first on screen)
     uint64_t pn = ticket;   // Record the present time by the game's present sequence number (ticket number): hle's present statistics are taken by "the game's nth present"; in the display link path the actual present count != the game's present count (old frames get merged and dropped)
     [dr addPresentedHandler:^(id<MTLDrawable> d) {   // Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)
         CFTimeInterval tt = d.presentedTime;
@@ -18960,14 +18850,7 @@ static struct timespec link_deadline(uint64_t ns);
     pthread_cond_broadcast(&g_link_cv);
     pthread_mutex_unlock(&g_link_mu);
     pthread_mutex_lock(&g_pq_mu);
-    if (!g_dm_present_link || g_rescue_mode) { pthread_mutex_unlock(&g_pq_mu); g_fg_pending = 0; return; }
-    if (g_fg_pending) {   // frame generation: the refresh after a generated picture shows the frame itself (its copy), whatever else waits
-        g_fg_pending = 0; pthread_mutex_unlock(&g_pq_mu);
-        g_fg_mode = 2; int ok;
-        @autoreleasepool { ok = present_now(&g_fg_t, 0, g_fg_frame, g_fg_ticket, g_fg_crop, update.drawable, update.targetPresentationTimestamp); }
-        g_fg_mode = 0; if (ok) g_fgen.shown++;
-        return;
-    }
+    if (!g_dm_present_link || g_rescue_mode) { pthread_mutex_unlock(&g_pq_mu); return; }
     // The previous frame's present interval was >= 2 (period > 25 ms): keep it on screen for its whole period before taking the next one, as the Switch flips only every N vertical syncs. This also holds while the link runs at 60 Hz (Mario 1.2.1 sets 2 for single frames, see nvn_game_fps in hle_nvn.c);
     //   before, every tick took the newest frame, so that frame, carrying the extra time step the game advanced for it, was shown for only 16.7 ms and the game looked like it jumped ahead
     const int hold = g_link_hold_until > 0 && update.targetPresentationTimestamp < g_link_hold_until - tol;
@@ -19023,13 +18906,8 @@ static struct timespec link_deadline(uint64_t ns);
     }
     int submitted;
     ext_wait(it.ev_val); snap_commit_wait(it.snap_v); sub_commit_wait(it.sub_v);
-    // Frame generation: a frame meant to stay up two refreshes or more (its period against the link's tick) gets a generated picture before it
-    const double tickp = vp > 0 ? vp : 1.0 / mtl_link_rate();
-    g_fg_mode = fg_enabled() && it.period >= 1.5 * tickp ? 1 : 0;
     @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); mtl_tex_unpin(it.t.serial); }
-    if (g_fg_mode == 1 && submitted && g_fg_made) { g_fg_pending = 1; g_fg_t = it.t; g_fg_frame = it.frame; g_fg_ticket = ticket; memcpy(g_fg_crop, it.crop, sizeof g_fg_crop); }
-    g_fg_mode = 0;
-    g_link_hold_until = submitted && (it.period > 0.025 || g_fg_pending) ? update.targetPresentationTimestamp + it.period : 0;
+    g_link_hold_until = submitted && it.period > 0.025 ? update.targetPresentationTimestamp + it.period : 0;
     if (!submitted) {
         pthread_mutex_lock(&g_pq_mu);
         if (ticket > g_pq_done) g_pq_done = ticket;
@@ -19082,16 +18960,15 @@ static const char *link_latency_why(void) { return g_present_latency > 0 ? "DM_P
 // for 60 callbacks a second instead of 30. Without the drain the 60 Hz link gains nothing reliably: the takes stay on the acquire's ticks or not as the last late frame left them
 static int link_30hz(void) { return front_fullscreen() ? front_screen_variable_refresh() : !link_drain_on() || mtl_snap_on(); }
 // The 120 Hz link (mode 2, a frame every other tick) in place of the 60 Hz one at 60 fps, unless DM_PRESENT_LINK chose the mode: 1 in fullscreen on a screen whose rate is a
-// multiple of 120, 2 with frame generation (fg_enabled) on such a screen in a window, 0 otherwise. In fullscreen on a 120 Hz screen the 60 Hz link showed presents one 120 Hz
+// multiple of 120, 0 otherwise. In fullscreen on a 120 Hz screen the 60 Hz link showed presents one 120 Hz
 // refresh after its target and then skipped a tick, and the frame step read the late frames as load: Ocarina of Time on a ROG XG27AQNGV at a fixed 120 Hz (M6, macOS 27)
 // held 1224 late frames in 52 s and 17-24 fps in gameplay at 10 ms of GPU, against 29 late and 59.7-60.0 fps on the 120 Hz link. The same was measured on ProMotion screens
 // at variable refresh (an M5 Pro, macOS 27.2: 40 callbacks a second at latency 2); the screen match then asks for a multiple of 120, so a screen switched mid-run keeps this
 // link. A window keeps the 60 Hz link, where every present lands on its target (docs/reference/frame-rate.md)
-static int fg_enabled(void);
 static int link_120(void) {
     int hz = front_screen_max_fps();
     if (g_present_link_env || mtl_fps_target() != 60 || hz < 120 || hz % 120) return 0;
-    return front_fullscreen() ? 1 : fg_enabled() ? 2 : 0;
+    return front_fullscreen();
 }
 static _Atomic int g_test_link_hold;   // DM_TEST_LINK_STALL: a link made during the stall (tried again after a rescue) starts paused, silent from its start as one that never calls back
 static int g_link_mode = 1;   // Current mode of the display link object: 1 / 2 same as g_dm_present_link, 3 = power-saving mode 30 Hz
@@ -19126,11 +19003,10 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     if (g_rescue_mode) want = 0;
     pthread_mutex_unlock(&g_pq_mu);
     if (want && mtl_fps_target() == 30 && link_30hz()) want = 3;   // Power-saving mode: display link at 30 Hz
-    // The 120 Hz link (a frame every other tick, link_120) at 60 fps: in fullscreen on any screen whose rate is a multiple of 120, and with frame generation in a window there too
-    // (the refresh between two frames shows the generated picture, 60 → 120). Decided before the screen match, which then asks for a multiple of 120, so a 240 Hz
+    // The 120 Hz link (a frame every other tick, link_120) at 60 fps: in fullscreen on any screen whose rate is a multiple of 120. Decided before the screen match, which then asks for a multiple of 120, so a 240 Hz
     // variable-refresh screen switched mid-run comes back on the 120 Hz link and not the 60 Hz one (link_120)
     static int l120_was; int l120 = want == 1 ? link_120() : 0;
-    if (l120 != l120_was) { l120_was = l120; MLOG("display link: %s (frame %llu)", l120 == 2 ? "120 Hz with frame generation, a frame every other tick and a generated picture on the refresh between" : l120 ? "120 Hz in fullscreen on a 120 Hz-multiple screen, a frame every other tick (DM_PRESENT_LINK=1 keeps 60 Hz)" : "60 Hz again (window, another screen rate or another frame rate)", (unsigned long long)atomic_load(&g_cur_frame)); }
+    if (l120 != l120_was) { l120_was = l120; MLOG("display link: %s (frame %llu)", l120 ? "120 Hz in fullscreen on a 120 Hz-multiple screen, a frame every other tick (DM_PRESENT_LINK=1 keeps 60 Hz)" : "60 Hz again (window, another screen rate or another frame rate)", (unsigned long long)atomic_load(&g_cur_frame)); }
     if (l120) want = 2;
     // the rate the screen match asks for: the game's, or 120 where the 120 Hz link will pace a 60 fps game in fullscreen. Asked for whether or not fullscreen has been entered
     // yet (the match acts in fullscreen only), so the request does not go from 60 to 120 as fullscreen starts: each change asked again for a mode, and a DELL S2725QC at

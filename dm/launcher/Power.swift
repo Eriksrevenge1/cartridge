@@ -1,6 +1,6 @@
 // On battery: a game Cartridge starts while the Mac runs on its battery gets lighter settings, as launch values (launch values beat the saved choices, launcher.c
 // saved_choices), so the player's saved choices stay as they are and apply again on the charger. Only rows the game has, and only to lower what it would use: the frame
-// rate to 30, the render scale to the chosen cap, frame generation off. A value an env file sets is left alone. It is decided at the start: plugging in or out during the
+// rate to 30, the render scale to the chosen cap. A value an env file sets is left alone. It is decided at the start: plugging in or out during the
 // game changes nothing until the next start.
 import Foundation
 import IOKit.ps
@@ -25,7 +25,6 @@ struct BatteryPlan {
     @AppStorage("battery.enabled") var enabled = true
     @AppStorage("battery.fps30") var fps30 = true
     @AppStorage("battery.scale") var scale = 0.75   // 1.0: the game's own setting
-    @AppStorage("battery.noFramegen") var noFramegen = true
 
     /// The launch values for this game now: none on the charger, with the plan off, or where the game already uses less
     func overrides(for g: Game) -> [String: String] {
@@ -44,7 +43,6 @@ struct BatteryPlan {
             let v = max(scale, s.min ?? scale)
             if s.accepts(String(format: "%.2f", v)) { set(s.env, String(format: "%.2f", v)) }
         }
-        if noFramegen, let s = rows["DM_FRAMEGEN"], current(s) == s.onValue { set(s.env, s.offValue) }
         return out
     }
     /// What the plan did, for the log and the game page
@@ -52,7 +50,6 @@ struct BatteryPlan {
         var parts: [String] = []
         if let v = o["DM_FPS_TARGET"] { parts.append("\(v) fps") }
         if let v = o["DM_RENDER_SCALE"], let d = Double(v) { parts.append("render scale \(Int((d * 100).rounded())) %") }
-        if o["DM_FRAMEGEN"] != nil { parts.append("no frame generation") }
         return parts.isEmpty ? nil : "On battery: " + parts.joined(separator: ", ")
     }
 }
@@ -61,7 +58,6 @@ struct BatterySettingsView: View {
     @AppStorage("battery.enabled") private var enabled = true
     @AppStorage("battery.fps30") private var fps30 = true
     @AppStorage("battery.scale") private var scale = 0.75
-    @AppStorage("battery.noFramegen") private var noFramegen = true
     private let battery = Power.hasBattery
     var body: some View {
         Form {
@@ -73,7 +69,6 @@ struct BatterySettingsView: View {
                     Text("The game's setting").tag(1.0)
                     ForEach([0.9, 0.8, 0.75, 0.7, 0.6, 0.5], id: \.self) { Text("\(Int(($0 * 100).rounded())) %").tag($0) }
                 }
-                Toggle("Frame generation off", isOn: $noFramegen)
             }
             .disabled(!enabled)
             Text("Each one applies only where the game has the setting and uses more than this. Your saved settings are not changed: they apply again on the charger. Plugging in or out takes effect at the game's next start.")
