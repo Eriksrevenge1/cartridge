@@ -217,6 +217,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 
 ## Found on this game
 
+- [A Switch 2 display at 120 Hz](../../../docs/reference/frame-rate.md#a-switch-2-display-at-120-hz): its engine reads the refresh rate and sets the 120 Hz capability from its graphics settings; this build passes 0, so it stays at 60 Hz (2026-11-20).
 - [ExeFS patches of mods](../../../docs/reference/rewriter.md#exefs-patches-of-mods): the pchtxt and IPS mods for this build.
 
 - [A display-link silence read as the game's late frames](../../../docs/reference/frame-rate.md#a-display-link-silence-read-as-the-games-late-frames): the hold stepped to 20 fps when the window was covered and shown again.

@@ -18613,7 +18613,7 @@ static int fg_enabled(void) {
              : "on at 60 fps: a frame halfway between each two, on the refresh between them (display link only; not at a 30 fps target)"); }
     return g_fg_on && (g_fg_force || mtl_fps_target() >= 60);
 }
-static struct { __strong id<MTLTexture> frame[2], lq[2], ls[2], fs, fq, out; NSUInteger w, h; MTLPixelFormat pf; int cur, have_prev; uint64_t made, shown; } g_fg;
+static struct { __strong id<MTLTexture> frame[2], lq[2], ls[2], fs, fq, out; NSUInteger w, h; MTLPixelFormat pf; int cur, have_prev; uint64_t made, shown; } g_fgen;
 static id<MTLRenderPipelineState> g_fg_copy, g_fg_luma, g_fg_coarse, g_fg_fine, g_fg_synth; static MTLPixelFormat g_fg_ppf; static int g_fg_broken;
 static id<MTL4ArgumentTable> g_fg_args; static id<MTLBuffer> g_fg_params;   // params: 3 slots (the present's allocator index) of 256 bytes, 32 per pass
 static int g_fg_mode;   // present_now: 0 the game's frame, 1 generate the picture before it (fg_encode), 2 the copy of the last frame (the refresh after a generated picture)
@@ -18651,17 +18651,17 @@ static int fg_ready(id<MTLTexture> raw) {
         if (!g_fg_copy || !g_fg_synth || !g_fg_luma || !g_fg_coarse || !g_fg_fine) { MLOG("[RED] frame generation: off (format %lu)", (unsigned long)pf); g_fg_broken = 1; return 0; }
         g_fg_ppf = pf;
     }
-    if (g_fg.frame[0] && g_fg.w == w && g_fg.h == h && g_fg.pf == pf) return 1;
+    if (g_fgen.frame[0] && g_fgen.w == w && g_fgen.h == h && g_fgen.pf == pf) return 1;
     pthread_mutex_lock(&g_pq_mu); while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);
-    for (int i = 0; i < 2; i++) { res_remove(g_fg.frame[i]); res_remove(g_fg.lq[i]); res_remove(g_fg.ls[i]); }
-    res_remove(g_fg.fs); res_remove(g_fg.fq); res_remove(g_fg.out);
+    for (int i = 0; i < 2; i++) { res_remove(g_fgen.frame[i]); res_remove(g_fgen.lq[i]); res_remove(g_fgen.ls[i]); }
+    res_remove(g_fgen.fs); res_remove(g_fgen.fq); res_remove(g_fgen.out);
     NSUInteger qw = (w + 3) / 4, qh = (h + 3) / 4, sw = (qw + 3) / 4, sh = (qh + 3) / 4;
-    for (int i = 0; i < 2; i++) { g_fg.frame[i] = fg_tex(pf, w, h, @"fg frame"); g_fg.lq[i] = fg_tex(MTLPixelFormatR16Float, qw, qh, @"fg luma 1/4"); g_fg.ls[i] = fg_tex(MTLPixelFormatR16Float, sw, sh, @"fg luma 1/16"); }
-    g_fg.fs = fg_tex(MTLPixelFormatRG16Float, sw, sh, @"fg motion 1/16"); g_fg.fq = fg_tex(MTLPixelFormatRG16Float, qw, qh, @"fg motion 1/4"); g_fg.out = fg_tex(pf, w, h, @"fg picture");
+    for (int i = 0; i < 2; i++) { g_fgen.frame[i] = fg_tex(pf, w, h, @"fg frame"); g_fgen.lq[i] = fg_tex(MTLPixelFormatR16Float, qw, qh, @"fg luma 1/4"); g_fgen.ls[i] = fg_tex(MTLPixelFormatR16Float, sw, sh, @"fg luma 1/16"); }
+    g_fgen.fs = fg_tex(MTLPixelFormatRG16Float, sw, sh, @"fg motion 1/16"); g_fgen.fq = fg_tex(MTLPixelFormatRG16Float, qw, qh, @"fg motion 1/4"); g_fgen.out = fg_tex(pf, w, h, @"fg picture");
     res_commit();
-    if (!g_fg.frame[0] || !g_fg.frame[1] || !g_fg.lq[0] || !g_fg.lq[1] || !g_fg.ls[0] || !g_fg.ls[1] || !g_fg.fs || !g_fg.fq || !g_fg.out) {
+    if (!g_fgen.frame[0] || !g_fgen.frame[1] || !g_fgen.lq[0] || !g_fgen.lq[1] || !g_fgen.ls[0] || !g_fgen.ls[1] || !g_fgen.fs || !g_fgen.fq || !g_fgen.out) {
         MLOG("[RED] frame generation: cannot create its textures (%lux%lu format %lu); off", (unsigned long)w, (unsigned long)h, (unsigned long)pf); g_fg_broken = 1; return 0; }
-    g_fg.w = w; g_fg.h = h; g_fg.pf = pf; g_fg.have_prev = 0;
+    g_fgen.w = w; g_fgen.h = h; g_fgen.pf = pf; g_fgen.have_prev = 0;
     MLOG("frame generation: %lux%lu format %lu, motion estimated at %lux%lu and %lux%lu", (unsigned long)w, (unsigned long)h, (unsigned long)pf, (unsigned long)sw, (unsigned long)sh, (unsigned long)qw, (unsigned long)qh);
     return 1;
 }
@@ -18686,20 +18686,20 @@ static void fg_pass(id<MTL4CommandBuffer> cb, id<MTLRenderPipelineState> pso, id
 static id<MTLTexture> fg_encode(id<MTL4CommandBuffer> cb, id<MTLTexture> src, int slot) {
     id<MTLTexture> raw = present_raw_src(src);
     if (!fg_ready(raw)) return nil;
-    int c = g_fg.cur ^ 1, p = g_fg.cur;
-    struct { float o[2], pad[2]; } lq = {{1.f / g_fg.w, 1.f / g_fg.h}, {0}}, ls = {{1.f / g_fg.lq[0].width, 1.f / g_fg.lq[0].height}, {0}};
-    fg_pass(cb, g_fg_copy, g_fg.frame[c], raw, nil, nil, slot, 0, NULL, 0);
-    fg_pass(cb, g_fg_luma, g_fg.lq[c], g_fg.frame[c], nil, nil, slot, 1, &lq, sizeof lq);
-    fg_pass(cb, g_fg_luma, g_fg.ls[c], g_fg.lq[c], nil, nil, slot, 2, &ls, sizeof ls);
-    g_fg.cur = c;
-    if (!g_fg.have_prev) { g_fg.have_prev = 1; return nil; }
+    int c = g_fgen.cur ^ 1, p = g_fgen.cur;
+    struct { float o[2], pad[2]; } lq = {{1.f / g_fgen.w, 1.f / g_fgen.h}, {0}}, ls = {{1.f / g_fgen.lq[0].width, 1.f / g_fgen.lq[0].height}, {0}};
+    fg_pass(cb, g_fg_copy, g_fgen.frame[c], raw, nil, nil, slot, 0, NULL, 0);
+    fg_pass(cb, g_fg_luma, g_fgen.lq[c], g_fgen.frame[c], nil, nil, slot, 1, &lq, sizeof lq);
+    fg_pass(cb, g_fg_luma, g_fgen.ls[c], g_fgen.lq[c], nil, nil, slot, 2, &ls, sizeof ls);
+    g_fgen.cur = c;
+    if (!g_fgen.have_prev) { g_fgen.have_prev = 1; return nil; }
     struct { int32_t r; float bias; int32_t pad[2]; } coarse = {6, 0.02f, {0}}, fine = {1, 0.01f, {0}};
-    struct { float inv[2], scale, pad; } sy = {{1.f / g_fg.w, 1.f / g_fg.h}, 4.f, 0};
-    fg_pass(cb, g_fg_coarse, g_fg.fs, g_fg.ls[c], g_fg.ls[p], nil, slot, 3, &coarse, sizeof coarse);
-    fg_pass(cb, g_fg_fine, g_fg.fq, g_fg.lq[c], g_fg.lq[p], g_fg.fs, slot, 4, &fine, sizeof fine);
-    fg_pass(cb, g_fg_synth, g_fg.out, g_fg.frame[c], g_fg.frame[p], g_fg.fq, slot, 5, &sy, sizeof sy);
-    if (!g_fg.made++) MLOG("frame generation: first generated picture (present #%llu)", (unsigned long long)g_present_n);
-    return g_fg.out;
+    struct { float inv[2], scale, pad; } sy = {{1.f / g_fgen.w, 1.f / g_fgen.h}, 4.f, 0};
+    fg_pass(cb, g_fg_coarse, g_fgen.fs, g_fgen.ls[c], g_fgen.ls[p], nil, slot, 3, &coarse, sizeof coarse);
+    fg_pass(cb, g_fg_fine, g_fgen.fq, g_fgen.lq[c], g_fgen.lq[p], g_fgen.fs, slot, 4, &fine, sizeof fine);
+    fg_pass(cb, g_fg_synth, g_fgen.out, g_fgen.frame[c], g_fgen.frame[p], g_fgen.fq, slot, 5, &sy, sizeof sy);
+    if (!g_fgen.made++) MLOG("frame generation: first generated picture (present #%llu)", (unsigned long long)g_present_n);
+    return g_fgen.out;
 }
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
@@ -18714,7 +18714,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
              g_up_total_ns / 1e6, g_bp_first_present / 1e9);
     }
     PD("X ser=%llu", t->serial);
-    id<MTLTexture> src = g_fg_mode == 2 ? g_fg.frame[g_fg.cur] : tex_mtl(t);   // frame generation's second refresh: the copy of the frame (the game's texture may hold a newer one)
+    id<MTLTexture> src = g_fg_mode == 2 ? g_fgen.frame[g_fgen.cur] : tex_mtl(t);   // frame generation's second refresh: the copy of the frame (the game's texture may hold a newer one)
     if (!src) { RED_ONCE(8, "present texture could not get an MTLTexture"); return 0; }
     // The picture's shape for the front end's layout (front.h front_picture_shape): reported when its width / height changes by more than 0.1 %, not on a size change of the same
     // shape (1280x720 handheld, 1920x1080 docked)
@@ -18943,7 +18943,7 @@ static struct timespec link_deadline(uint64_t ns);
         g_fg_pending = 0; pthread_mutex_unlock(&g_pq_mu);
         g_fg_mode = 2; int ok;
         @autoreleasepool { ok = present_now(&g_fg_t, 0, g_fg_frame, g_fg_ticket, g_fg_crop, update.drawable, update.targetPresentationTimestamp); }
-        g_fg_mode = 0; if (ok) g_fg.shown++;
+        g_fg_mode = 0; if (ok) g_fgen.shown++;
         return;
     }
     // The previous frame's present interval was >= 2 (period > 25 ms): keep it on screen for its whole period before taking the next one, as the Switch flips only every N vertical syncs. This also holds while the link runs at 60 Hz (Mario 1.2.1 sets 2 for single frames, see nvn_game_fps in hle_nvn.c);
