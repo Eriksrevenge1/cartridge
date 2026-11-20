@@ -238,6 +238,8 @@ struct GameView: View {
 struct GameSettingsView: View {
     let game: Game
     @StateObject private var m: LauncherModel
+    @EnvironmentObject var library: Library
+    @State private var perf: SessionPerf?   // the last session, for the Performance section (Perf.swift)
     init(game: Game) {
         self.game = game
         var env = game.envFileValues()
@@ -247,6 +249,7 @@ struct GameSettingsView: View {
     var body: some View {
         Form {
             if m.settings.isEmpty { Text("This app was packed without a settings list.").foregroundStyle(.secondary) }
+            PerfSection(game: game, perf: perf, m: m)
             ScreenSection(game: game)
             ForEach(m.sections, id: \.self) { sec in
                 Section(sec) { ForEach(m.rows(in: sec)) { SettingRow(s: $0, m: m) } }
@@ -260,6 +263,12 @@ struct GameSettingsView: View {
         }
         .formStyle(.grouped)
         .onChange(of: m.values) { m.save() }
+        .task(id: library.running.contains(game.id)) {
+            guard !library.running.contains(game.id) else { perf = nil; return }
+            let g = game
+            perf = await Task.detached(priority: .utility) { SessionPerf.read(g) }.value
+            if let p = perf { PerfMemory.judge(g, p, current: m.values) }
+        }
     }
 }
 
