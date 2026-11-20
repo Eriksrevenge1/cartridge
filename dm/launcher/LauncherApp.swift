@@ -240,6 +240,7 @@ struct GameSettingsView: View {
     @StateObject private var m: LauncherModel
     @EnvironmentObject var library: Library
     @State private var perf: SessionPerf?   // the last session, for the Performance section (Perf.swift)
+    @State private var seen120: Game120.Seen?   // what the last session showed of 120 fps (Perf.swift Game120)
     init(game: Game) {
         self.game = game
         var env = game.envFileValues()
@@ -252,7 +253,16 @@ struct GameSettingsView: View {
             PerfSection(game: game, perf: perf, m: m)
             ScreenSection(game: game)
             ForEach(m.sections, id: \.self) { sec in
-                Section(sec) { ForEach(m.rows(in: sec)) { SettingRow(s: $0, m: m) } }
+                Section(sec) {
+                    let rows = m.rows(in: sec)
+                    // a game known to run at 120 fps: where 120 is chosen, beside Frame rate (which offers 30 and 60 only), or first in the Game section
+                    let at120 = Game120.known(game) && sec == "Game" ? (rows.firstIndex { $0.env == "DM_FPS_TARGET" }.map { $0 + 1 } ?? 0) : -1
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { i, r in
+                        if i == at120 { Game120Row(ranLast: seen120?.ran120 ?? false, hostCapped: rows.contains { $0.env == "DM_FPS_TARGET" }) }
+                        SettingRow(s: r, m: m)
+                    }
+                    if at120 == rows.count { Game120Row(ranLast: seen120?.ran120 ?? false, hostCapped: rows.contains { $0.env == "DM_FPS_TARGET" }) }
+                }
             }
             if !m.settings.isEmpty {
                 Section {
@@ -267,6 +277,7 @@ struct GameSettingsView: View {
             guard !library.running.contains(game.id) else { perf = nil; return }
             let g = game
             perf = await Task.detached(priority: .utility) { SessionPerf.read(g) }.value
+            seen120 = await Task.detached(priority: .utility) { Game120.learn(g) }.value
             if let p = perf { PerfMemory.judge(g, p, current: m.values) }
         }
     }

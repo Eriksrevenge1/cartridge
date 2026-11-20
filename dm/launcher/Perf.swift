@@ -146,3 +146,45 @@ struct PerfSection: View {
         }
     }
 }
+
+/// 120 fps on a Switch 2 game: the game chooses it itself, in its own options or by default, once it has told the system it can run at 120 Hz (dm/gfx/hle_vi.c logs
+/// "vi::SetDisplay120HzRefreshRateCapability 1"). Its files cannot say so beforehand: Ocarina of Time's engine has the call and passes 0. So Cartridge learns it from the game's
+/// log after a session, remembers it, and says on the Settings page where 120 fps is chosen: the Frame rate setting offers only 30 and 60 (the app's own cap), which read as "no 120"
+enum Game120 {
+    struct Seen { var capable: Bool; var ran120: Bool }
+    private static func key(_ g: Game) -> String { "fps120.\(g.titleID)" }
+    /// What the last session's log shows, nil when it does not mention the 120 Hz capability
+    static func scan(_ g: Game) -> Seen? {
+        guard let text = try? String(contentsOf: g.log, encoding: .utf8) else { return nil }
+        var s: Seen?
+        for line in text.split(separator: "\n") where line.contains("vi::SetDisplay120HzRefreshRateCapability ") || line.contains("vi: display refresh rate ") {
+            if line.contains("SetDisplay120HzRefreshRateCapability 1") { s = Seen(capable: true, ran120: s?.ran120 ?? false || line.contains("display runs at 120 Hz")) }
+            else if line.contains("SetDisplay120HzRefreshRateCapability 0") { s = s ?? Seen(capable: false, ran120: false) }
+            else if line.contains("→ 120 Hz") { s?.ran120 = true }
+        }
+        return s
+    }
+    /// Read the last session and remember a game that turned 120 Hz on (once seen, it stays known: a session spent in a 60 fps mode does not undo it)
+    static func learn(_ g: Game) -> Seen? {
+        let s = scan(g)
+        if s?.capable == true { UserDefaults.standard.set(true, forKey: key(g)) }
+        return s
+    }
+    static func known(_ g: Game) -> Bool { UserDefaults.standard.bool(forKey: key(g)) }
+}
+
+/// The line beside Frame rate for a game known to run at 120 fps
+struct Game120Row: View {
+    let ranLast: Bool
+    let hostCapped: Bool   // the profile's Frame rate row: a cap of 30 or 60 that the app applies, which holds the game below 120
+    var body: some View {
+        LabeledContent {
+            Text(hostCapped ? "Not in this build" : "In the game's own options").foregroundStyle(.secondary)
+        } label: {
+            Text("120 fps")
+            Text(hostCapped
+                 ? "This game can run at 120 fps, but this build caps its frame rate with the setting above, so it plays at 30 or 60."
+                 : "This game can run at 120 fps. Turn it on in the game's own settings (often called Performance mode or Frame rate). It plays at 120 fps on a screen running at 120 Hz, and at 60 on a 60 Hz screen.\(ranLast ? " Your last session ran at 120 fps." : "")")
+        }
+    }
+}
