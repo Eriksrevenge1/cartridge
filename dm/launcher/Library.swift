@@ -48,8 +48,9 @@ struct Game: Identifiable, Hashable {
 
     /// The settings the app offers (launcher.json, dm/games/settings.py)
     func settings() -> [Setting] {
-        guard let d = try? Data(contentsOf: dm.appendingPathComponent("launcher.json")),
-              let f = try? JSONDecoder().decode(SettingsFile.self, from: d) else { return [] }
+        guard var d = try? Data(contentsOf: dm.appendingPathComponent("launcher.json")) else { return [] }
+        d = RepoSettings.shared.refresh(d)
+        guard let f = try? JSONDecoder().decode(SettingsFile.self, from: d) else { return [] }
         return f.settings
     }
 
@@ -134,6 +135,8 @@ final class Library: ObservableObject {
         p.executableURL = g.executable
         var env = ProcessInfo.processInfo.environment
         env["DM_LAUNCHER"] = "0"
+        // the screen chosen in its settings (ScreenSection), for an app whose launcher does not read display.screen yet; an env file's DM_SCREEN still wins there
+        if env["DM_SCREEN"] == nil, let s = UserDefaults(suiteName: g.bundleID)?.string(forKey: "display.screen"), !s.isEmpty, g.envFileValues()["DM_SCREEN"] == nil { env["DM_SCREEN"] = s }
         p.environment = env
         let started = Date()
         p.terminationHandler = { [weak self] proc in
@@ -149,10 +152,51 @@ final class Library: ObservableObject {
         do {
             try p.run()
             processes[g.id] = p; running.insert(g.id)
+            handFocus(to: g)
         } catch {
             lastExit = GameExit(game: g, status: -1)
             NSLog("Cartridge: cannot start %@: %@", g.executable.path, error.localizedDescription)
         }
     }
+    /// Since macOS 14 an app started in the background may not take the focus from the app in front, here Cartridge: the game's own activate was refused, so it opened behind
+    /// Cartridge, its fullscreen space hidden where both share a screen, and macOS gave it a covered window's display link. So Cartridge yields to it once it is running
+    private func handFocus(to g: Game, tries: Int = 40) {
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).first {
+            if #available(macOS 14.0, *) { NSApp.yieldActivation(to: app) }
+            app.activate()
+            return
+        }
+        guard tries > 0, running.contains(g.id) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.handFocus(to: g, tries: tries - 1) }
+    }
     func stop(_ g: Game) { processes[g.id]?.terminate() }   // SIGTERM: launcher.c forwards it to the host
+}
+
+/// The settings list as nxnative has it now (dm/games/settings.tsv in the repository Cartridge was built from): each row's label, note and needs replace those an app was
+/// packed with, so a reworded setting or a new dependency (Frame generation only at 60 fps) shows without rebuilding every game. Which rows a game has, their values and
+/// defaults stay the app's own: those depend on the game and on what its host can take
+final class RepoSettings {
+    static let shared = RepoSettings()
+    private var rows: [String: (label: String, note: String, needs: String?)] = [:]
+    private init() {
+        let repo = UserDefaults.standard.string(forKey: "build.repo") ?? (Bundle.main.infoDictionary?["DMRepo"] as? String ?? "")
+        guard !repo.isEmpty, let t = try? String(contentsOfFile: repo + "/dm/games/settings.tsv", encoding: .utf8) else { return }
+        for line in t.split(whereSeparator: \.isNewline) where !line.hasPrefix("#") {
+            let c = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard c.count >= 7 else { continue }
+            let meta = c.count > 8 ? c[8] : ""
+            let needs = meta.split(separator: ";").map(String.init).first { $0.hasPrefix("needs=") }.map { String($0.dropFirst(6)) }
+            rows[c[0]] = (c[6], c.count > 7 ? c[7] : "", needs)
+        }
+    }
+    func refresh(_ data: Data) -> Data {
+        guard !rows.isEmpty, var top = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let list = top["settings"] as? [[String: Any]] else { return data }
+        top["settings"] = list.map { r -> [String: Any] in
+            guard let env = r["env"] as? String, let now = rows[env] else { return r }
+            var o = r; o["label"] = now.label; o["note"] = now.note
+            if let n = now.needs { o["needs"] = n } else { o.removeValue(forKey: "needs") }
+            return o
+        }
+        return (try? JSONSerialization.data(withJSONObject: top)) ?? data
+    }
 }

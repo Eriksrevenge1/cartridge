@@ -233,6 +233,7 @@ struct GameSettingsView: View {
     var body: some View {
         Form {
             if m.settings.isEmpty { Text("This app was packed without a settings list.").foregroundStyle(.secondary) }
+            ScreenSection(game: game)
             ForEach(m.sections, id: \.self) { sec in
                 Section(sec) { ForEach(m.rows(in: sec)) { SettingRow(s: $0, m: m) } }
             }
@@ -245,6 +246,57 @@ struct GameSettingsView: View {
         }
         .formStyle(.grouped)
         .onChange(of: m.values) { m.save() }
+    }
+}
+
+/// The screen the game opens on: display.screen in the game's preferences (a screen's name), which its launcher hands the host as DM_SCREEN (dm/mac/launcher.c display_screen),
+/// so a start from Finder takes it too; Library.play passes it as well, for an app packed before its launcher read the key. Each screen is listed with its refresh rate, and
+/// whether it is variable, since that decides how smoothly a game paces on it
+struct ScreenSection: View {
+    let game: Game
+    @State private var choice = ""
+    @State private var screens: [ScreenInfo] = ScreenInfo.all()
+    @State private var windowed = true
+    private var prefs: UserDefaults? { UserDefaults(suiteName: game.bundleID) }
+    /// The Display mode (launcher.DM_FULLSCREEN, or the game's env file): fullscreen sets the screen's rate for the game (front_mac.m screen_match_apply), a window cannot
+    private func readMode() {
+        let v = game.envFileValues()["DM_FULLSCREEN"] ?? prefs?.string(forKey: "launcher.DM_FULLSCREEN") ?? "0"
+        windowed = v == "0"
+    }
+
+    var body: some View {
+        Section {
+            Picker("Screen", selection: $choice) {
+                Text("Where macOS puts it").tag("")
+                ForEach(screens) { Text($0.label).tag($0.name) }
+                if !choice.isEmpty && !screens.contains(where: { $0.name == choice }) { Text("\(choice) (not connected)").tag(choice) }
+            }
+            if windowed, let s = screens.first(where: { $0.name == choice }) ?? (choice.isEmpty ? screens.first : nil), let warn = s.windowWarning {
+                Text(warn).font(.footnote).foregroundStyle(.orange)
+            }
+            Text("Fullscreen sets the screen's refresh rate for the game by itself.").font(.footnote).foregroundStyle(.secondary)
+        } header: { Text("Display") }
+        .onAppear { choice = prefs?.string(forKey: "display.screen") ?? ""; screens = ScreenInfo.all(); readMode() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in screens = ScreenInfo.all() }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in readMode() }
+        .onChange(of: choice) { if choice.isEmpty { prefs?.removeObject(forKey: "display.screen") } else { prefs?.set(choice, forKey: "display.screen") } }
+    }
+}
+
+struct ScreenInfo: Identifiable {
+    let name: String, hz: Int, variable: Bool
+    var id: String { name }
+    var label: String { "\(name) — \(hz) Hz\(variable ? ", variable" : "")" }
+    /// In a window the screen keeps its own rate, so the game is paced on it as it is: only a fixed multiple of 60 shows every frame evenly
+    var windowWarning: String? {
+        if variable { return "In a window, variable refresh can stutter. Play in Fullscreen, or set this screen to 60 or 120 Hz in System Settings › Displays." }
+        if hz % 60 != 0 { return "In a window, \(hz) Hz can stutter. Play in Fullscreen, or set this screen to 60 or 120 Hz in System Settings › Displays." }
+        return nil
+    }
+    static func all() -> [ScreenInfo] {
+        NSScreen.screens.map { s in
+            ScreenInfo(name: s.localizedName, hz: s.maximumFramesPerSecond, variable: s.minimumRefreshInterval > 0 && s.maximumRefreshInterval - s.minimumRefreshInterval > 0.0005)
+        }
     }
 }
 
