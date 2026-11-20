@@ -62,11 +62,12 @@ Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its worl
 
 ### Frame generation
 
-Mac only, off by default. When a game shows each frame for two screen refreshes or more (30 fps on a 60 Hz screen, or 60 fps on a 120 Hz one), the app draws a frame halfway between each two and shows it on the refresh in between, so motion looks twice as smooth. The game itself runs no faster.
+Experimental. Mac only, off by default, and only at a 60 fps **Frame rate** (it is hidden at 30). On a screen at 120 Hz or a multiple of it, the app draws a frame halfway between each two the game draws and shows it on the refresh in between: 60 → 120 fps on screen. The game itself runs no faster.
 
-- **How:** the app estimates the motion between the game's last two pictures on the GPU and blends them along it. Games hand over no motion vectors, which MetalFX's own frame interpolator needs.
-- **Cost:** the game's own frame reaches the screen one refresh later (16.7 ms at 60 Hz), the generated picture taking its place. GPU time is small: on an Apple M6, Ocarina of Time at 2560x1440 capped at 30 fps showed 60 pictures a second with the whole present (motion estimate, blend and present pass) at 0.45-0.55 ms a picture. Fine ground texture can look slightly softer in the generated pictures, and where the two frames disagree (something coming out from behind something else, a camera cut) the newer frame is shown, so fast motion can smear slightly at edges.
-- **When to use it:** for a game held at 30 fps (by its own cap, or the Frame rate setting to save heat), or a 60 fps game on a 120 Hz ProMotion screen. It does nothing for a game that already fills every refresh, and it needs the display link (the default).
+- **How:** the app estimates the motion between the game's last two pictures on the GPU and blends them along it. Games hand over no motion vectors, which MetalFX's own frame interpolator needs. At 60 fps the display link runs at 120 Hz for it, in a window too.
+- **Cost:** the game's own frame reaches the screen one refresh later (8.3 ms at 120 Hz), the generated picture taking its place. GPU time is small: on an Apple M6, Ocarina of Time at 2560x1440 showed 119-120 pictures a second at 60 fps, the whole present (motion estimate, blend and present pass) about 0.5 ms a picture. Fast motion shows artifacts: sprinting through Hyrule Field's grass in Ocarina of Time, the generated pictures smeared and tore at 60 → 120 as at 30 → 60 (judged by the player, 2026-11-19), where the motion estimate loses track. Better motion estimates are the open work.
+- **Why not at 30 fps:** frames 33 ms apart move too far between them when the camera turns or the character sprints, and the motion estimate loses track: in Hyrule Field the ground smeared and tore. `DM_FRAMEGEN=2` in `env.txt` forces it at 30 anyway.
+- **When it does nothing:** on a 60 Hz screen at 60 fps (no refresh between frames to show a picture on), and without the display link.
 - **Turn it on:** **Frame generation** in the settings window, or `DM_FRAMEGEN=1` in the game's `env.txt`.
 
 ### Game's upscaler
@@ -295,7 +296,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Press a button to join | `DM_PAD_PRESS_TO_JOIN` | `1`, `0` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | Game's upscaler | `DM_UPSCALER` | `game`, `metalfx` |
-| Frame generation | `DM_FRAMEGEN` | `1`, `0` (Mac) |
+| Frame generation | `DM_FRAMEGEN` | `1`, `0`, `2` at any frame rate (Mac) |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |
