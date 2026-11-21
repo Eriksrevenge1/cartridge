@@ -1,0 +1,35 @@
+# Cartridge's fork (docs/launcher.md, Issues and pull requests): someone opens an issue or a pull request here, and the owner hears of it. GitHub notifies a repository's
+# owner of new issues and pull requests already (Watch); a comment that mentions the owner makes sure it reaches their email and, with the GitHub app, their phone.
+# Nothing is resolved, closed, merged or labelled here: the owner decides what happens to each. The workflow's own issues (follow-upstream.yml, label upstream-merge)
+# and pull requests opened by the owner or by the workflows are left alone.
+# pull_request_target runs this repository's copy of the workflow with its token, never the pull request's code: nothing is checked out.
+name: notify-owner
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.actor != github.repository_owner &&
+      github.actor != 'github-actions[bot]' &&
+      !contains(github.event.issue.labels.*.name, 'upstream-merge')
+    steps:
+      - name: Mention the owner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          KIND: ${{ github.event.issue && 'issue' || 'pull request' }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          gh issue comment "$NUMBER" --body "Thanks for the $KIND. @$OWNER will look at it."
