@@ -10,7 +10,7 @@ maintainer closes pull requests and commits them himself, so a closed pull reque
 landed <sha>. A pull request closed with no such commit becomes fork-only (declined #N) only when it was closed as not planned or a maintainer's last comment says
 so; otherwise the row is flagged for the owner to look at. For each pending or forwarded row with a branch, a merge preview (git merge-tree) on upstream's main says
 whether the branch still applies, so a conflict shows before upstream merges anything. For an open forwarded pull request it reads its CI checks: a failing check
-is the fork's to fix (flagged, and the workflow's Claude fixes it) unless the same workflow's newest finished run on upstream's main failed too, which makes it
+is the fork's to fix (flagged, and the workflow's Claude fixes it) unless the same workflow's newest run on upstream's main that passed or failed (not one cancelled) failed too, which makes it
 upstream's own (noted, nothing to do). Exit status 0; 1 on an error (no table, no upstream ref).
 """
 import argparse, json, re, subprocess, sys
@@ -115,9 +115,10 @@ def applies(branch, upstream):
 _main_runs = {}
 def main_failing(repo, workflow):   # whether the workflow's newest finished run on upstream's main failed (cached per run of this script)
     if (repo, workflow) not in _main_runs:
-        try: runs = gh(['run', 'list', '--repo', repo, '--branch', 'main', '--workflow', workflow, '--status', 'completed', '--limit', '1', '--json', 'conclusion'])
+        try: runs = gh(['run', 'list', '--repo', repo, '--branch', 'main', '--workflow', workflow, '--status', 'completed', '--limit', '10', '--json', 'conclusion'])
         except RuntimeError: runs = []
-        _main_runs[repo, workflow] = bool(runs) and runs[0].get('conclusion') == 'failure'
+        done = [r.get('conclusion') for r in runs or [] if r.get('conclusion') in ('success', 'failure')]   # a cancelled or skipped run says nothing
+        _main_runs[repo, workflow] = bool(done) and done[0] == 'failure'
     return _main_runs[repo, workflow]
 
 
