@@ -20,6 +20,7 @@ final class CheatsModel: ObservableObject {
     @Published var masterOff = false
     @Published var others: [String] = []   // build IDs of files for other versions of the game
     @Published var message: String?
+    @Published var finder: FinderState = .idle   // Find Cheats (CheatFinder.swift)
 
     init(game: Game) { self.game = game; buildID = game.buildID; reload() }
 
@@ -148,6 +149,7 @@ struct CheatsView: View {
                 Text("Changes take effect at the game's next start, or with Cheats › Reload cheats (⌘R) in the game. Typed values and run-once cheats are set in the game's Cheats window.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            FindCheatsSection(m: m)
             if !m.cheats.isEmpty {
                 Section {
                     Toggle("Cheats on", isOn: Binding(get: { !m.masterOff }, set: { m.setMaster(off: !$0) }))
