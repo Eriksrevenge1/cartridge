@@ -20,10 +20,12 @@ struct LauncherApp: App {
         WindowGroup("Cartridge", id: "library") {
             LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder)
                 .frame(minWidth: 860, minHeight: 560)
+                .modifier(SetupOnFirstStart())
                 .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder; appearance.apply() }
                 .onChange(of: appearance) { appearance.apply() }
         }
         .commands {
+            CommandGroup(after: .appInfo) { SetupCommand() }
             CommandGroup(after: .newItem) {
                 Button("Add Folder to Library…") { addFolder(library) }.keyboardShortcut("o")
                 Button("Refresh Library") { library.scan() }.keyboardShortcut("r")
@@ -36,6 +38,9 @@ struct LauncherApp: App {
             ConsoleView().environmentObject(library).environmentObject(pad).frame(minWidth: 900, minHeight: 560)
         }
         .windowStyle(.hiddenTitleBar)
+        Window("Set Up Cartridge", id: "setup") {
+            SetupView().frame(minWidth: 720, minHeight: 620)
+        }
         Window("Build Games", id: "build") {
             BuildView().environmentObject(builder).frame(minWidth: 820, minHeight: 520)
                 .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder }
@@ -395,10 +400,22 @@ struct FoldersView: View {
     @AppStorage("appearance") private var appearance: Appearance = .system
     @AppStorage("menuBar") private var menuBar = true
     @State private var pick: URL?
+    @AppStorage("games.root") private var gamesRoot = ""
     var body: some View {
         VStack(alignment: .leading) {
             Picker("Appearance", selection: $appearance) { ForEach(Appearance.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(maxWidth: 320)
             Toggle("Show Cartridge in the menu bar (recent games, console mode)", isOn: $menuBar)
+            Divider().padding(.vertical, 4)
+            Text("Games folder").font(.headline)
+            HStack {
+                Text(gamesRoot.isEmpty ? "Not set" : gamesRoot).lineLimit(1).truncationMode(.middle).foregroundStyle(gamesRoot.isEmpty ? .secondary : .primary)
+                Button(gamesRoot.isEmpty ? "Choose…" : "Change…") {
+                    let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
+                    p.message = "Choose or make your games folder (on the drive with room for your games)"
+                    if p.runModal() == .OK, let u = p.url { GamesFolder.set(u); gamesRoot = u.path }
+                }
+            }
+            Text("Each game gets a folder there with your game files, its build and its app (GamesFolder).").font(.footnote).foregroundStyle(.secondary)
             Divider().padding(.vertical, 4)
             Text("Library folders").font(.headline)
             Text("nxnative Mac apps in these folders (and three levels of subfolders) appear in the library.").font(.footnote).foregroundStyle(.secondary)
@@ -579,6 +596,24 @@ struct FirstStartNote: View {
         } else if !library.running.contains(game.id) && library.isFirstStart(game) {
             Label("First start since this build: macOS checks the app before it opens, which can take a few minutes.", systemImage: "clock")
                 .font(.callout).foregroundStyle(.secondary).frame(maxWidth: 640, alignment: .leading).padding(.horizontal).padding(.top, 6)
+        }
+    }
+}
+
+/// Cartridge › Setup Assistant…
+struct SetupCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View { Button("Setup Assistant…") { openWindow(id: "setup") } }
+}
+/// At the first start, the setup assistant opens by itself when something a build needs is missing (until its Done is pressed once)
+struct SetupOnFirstStart: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+    func body(content: Content) -> some View {
+        content.task {
+            guard !UserDefaults.standard.bool(forKey: "setup.seen") else { return }
+            let s = Setup.shared; s.check()
+            for _ in 0..<60 { try? await Task.sleep(for: .milliseconds(250)); if !s.items.isEmpty && !s.items.contains(where: { $0.state == .checking }) { break } }
+            if s.incomplete { openWindow(id: "setup") }
         }
     }
 }

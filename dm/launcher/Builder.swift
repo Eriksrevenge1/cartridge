@@ -106,6 +106,13 @@ final class Builder: ObservableObject {
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("nxnative-icon-\(g.titleID).png")
         return (try? png.write(to: out)) != nil ? out : nil
     }
+    /// A game's files moved (GamesFolder): its last build's source follows, so Rebuild finds them
+    func setSource(_ titleID: String, to u: URL) {
+        var all = store.dictionary(forKey: "build.sources") ?? [:]
+        var d = (all[titleID.uppercased()] as? [String: String]) ?? ["target": BuildTarget.mac.rawValue]
+        d["source"] = u.path; d.removeValue(forKey: "out")
+        all[titleID.uppercased()] = d; store.set(all, forKey: "build.sources")
+    }
     private func remember(_ j: BuildJob) {
         guard let tid = j.titleID else { return }
         var all = store.dictionary(forKey: "build.sources") ?? [:]
@@ -260,6 +267,8 @@ struct BuildView: View {
     @State private var req = BuildRequest(source: URL(fileURLWithPath: "/"), target: .mac)
     @State private var hasSource = false
     @State private var both = false
+    @State private var intoFolder = true   // the game's files moved into the games folder first (GamesFolder)
+    @State private var moving: String?
 
     var body: some View {
         HSplitView {
@@ -308,11 +317,12 @@ struct BuildView: View {
                     Toggle("iPhone: keep the game files out of the IPA (copied once with push_romfs.sh)", isOn: $req.romfsSeparate)
                 }
                 Section {
-                    Button("Build") {
-                        builder.enqueue(req)
-                        if both { var o = req; o.target = req.target == .mac ? .ios : .mac; builder.enqueue(o) }
+                    if hasSource, let r = GamesFolder.root, !GamesFolder.contains(req.source) {
+                        Toggle("Put the game's files in your games folder (\(r.lastPathComponent))", isOn: $intoFolder)
                     }
-                    .buttonStyle(.borderedProminent).disabled(!hasSource || (builder.needsKeys(req.source) && builder.keys.isEmpty))
+                    if let m = moving { HStack { ProgressView().controlSize(.small); Text(m).font(.footnote) } }
+                    Button("Build") { start() }
+                    .buttonStyle(.borderedProminent).disabled(!hasSource || moving != nil || (builder.needsKeys(req.source) && builder.keys.isEmpty))
                     if let why = builder.ready { Text(why).foregroundStyle(.red).font(.footnote) }
                 }
             }
@@ -325,9 +335,28 @@ struct BuildView: View {
             JobsView().frame(minWidth: 360)
         }
     }
+    /// The build, after the source moved into the games folder when that is asked for (on the same drive a rename; to another a copy, asked first)
+    private func start() {
+        func go(_ r: BuildRequest) {
+            builder.enqueue(r)
+            if both { var o = r; o.target = r.target == .mac ? .ios : .mac; builder.enqueue(o) }
+        }
+        guard intoFolder, let root = GamesFolder.root, !GamesFolder.contains(req.source) else { go(req); return }
+        guard GamesFolder.confirmCopy([req.source], to: root) else { return }
+        var r = req; moving = "Moving the game's files into \(root.lastPathComponent)…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let n = try GamesFolder.adopt(r.source)
+                DispatchQueue.main.async { r.source = n; req.source = n; moving = nil; go(r) }
+            } catch {
+                DispatchQueue.main.async { moving = nil; let a = NSAlert(); a.messageText = "The files could not be moved"; a.informativeText = error.localizedDescription; a.runModal() }
+            }
+        }
+    }
     private func pickSource() {
         let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = true
         p.message = "Choose the game's NSP folder, a dump folder or a .nup file"
+        if let r = GamesFolder.root, FileManager.default.fileExists(atPath: r.path) { p.directoryURL = r }   // your games folder (Setup Assistant)
         if p.runModal() == .OK, let u = p.url { req.source = u; hasSource = true }
     }
     private func pickKeys() {

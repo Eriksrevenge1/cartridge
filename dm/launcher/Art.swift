@@ -229,6 +229,27 @@ struct GameMenu: View {
         Button("Choose Cover…") { chooseCover(game) }
         if Covers.shared.hasCustom(game) { Button("Remove Custom Cover") { Covers.shared.setCustom(game, from: nil) } }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([game.url]) }
+        if let root = GamesFolder.root, !GamesFolder.contains(game.url) {
+            Button("Move into Games Folder") { moveIntoGamesFolder(game, root: root, library: library, builder: builder) }.disabled(library.running.contains(game.id))
+        }
+    }
+}
+
+/// A library game's files (its source, the script's folders, the app) moved into the games folder, Rebuild's source following them
+func moveIntoGamesFolder(_ g: Game, root: URL, library: Library, builder: Builder) {
+    let src = builder.rebuildRequest(for: g)?.source
+    let parts = GamesFolder.parts(of: g, source: src)
+    let a = NSAlert(); a.messageText = "Move \(g.title) into \(root.lastPathComponent)?"
+    a.informativeText = "These move into a folder of their own there:\n" + parts.map { "• " + $0.lastPathComponent }.joined(separator: "\n")
+    a.addButton(withTitle: "Move"); a.addButton(withTitle: "Cancel")
+    guard a.runModal() == .alertFirstButtonReturn, GamesFolder.confirmCopy(parts, to: root) else { return }
+    DispatchQueue.global(qos: .userInitiated).async {
+        do {
+            let n = try GamesFolder.move(g, source: src)
+            DispatchQueue.main.async { if let n { builder.setSource(g.titleID, to: n) }; library.scan() }
+        } catch {
+            DispatchQueue.main.async { library.scan(); let e = NSAlert(); e.messageText = "\(g.title) could not be moved"; e.informativeText = error.localizedDescription; e.runModal() }
+        }
     }
 }
 
