@@ -102,7 +102,7 @@ struct UpdatesSettingsView: View {
                     case .idle: EmptyView()
                     case .checking: ProgressView().controlSize(.small)
                     case .upToDate: Text("Cartridge is up to date.").foregroundStyle(.secondary)
-                    case .available(let r): Text("Cartridge 1.\(r.build)\(r.prerelease ? " (experimental)" : "") is available.")
+                    case .available(let r): Text(verbatim: "Cartridge 1.\(r.build)\(r.prerelease ? " (experimental)" : "") is available.")   // verbatim: no digit grouping ("1.1,844")
                     case .downloading: ProgressView().controlSize(.small); Text("Downloading…").foregroundStyle(.secondary)
                     case .failed(let m): Text(m).foregroundStyle(.red)
                     }
