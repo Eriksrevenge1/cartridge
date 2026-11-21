@@ -269,20 +269,51 @@ struct BuildView: View {
     @State private var both = false
     @State private var intoFolder = true   // the game's files moved into the games folder first (GamesFolder)
     @State private var moving: String?
+    // The game picked file by file: its base game (NSP, XCI, NSZ, XCZ, or a Switch 2 .nup, which is the whole game), its update and its DLC, from any folders.
+    // At Build they are put in a folder of their own (assemble). A folder (NSPs, a dump) can still be the source as it is (req.source with no base file)
+    @State private var baseFile: URL?
+    @State private var updateFile: URL?
+    @State private var dlcFiles: [URL] = []
+    private var files: [URL] {   // what assemble puts together; none for a .nup or a folder
+        guard let b = baseFile, b.pathExtension.lowercased() != "nup" else { return [] }
+        return [b] + (updateFile.map { [$0] } ?? []) + dlcFiles
+    }
+    private var isNup: Bool { baseFile?.pathExtension.lowercased() == "nup" }
 
     var body: some View {
         HSplitView {
             Form {
                 Section("Game") {
-                    LabeledContent("Source") {
-                        HStack {
-                            Text(hasSource ? req.source.path : "None").lineLimit(1).truncationMode(.middle).foregroundStyle(hasSource ? .primary : .secondary)
-                            Button("Choose…") { pickSource() }
+                    if baseFile == nil && hasSource {   // a folder chosen as it is
+                        LabeledContent("Folder") {
+                            HStack {
+                                Text(req.source.path).lineLimit(1).truncationMode(.middle)
+                                Button("Use Files Instead") { hasSource = false }
+                            }
                         }
+                    } else {
+                        slot("Base game", baseFile, choose: { pick(.base) }, remove: baseFile == nil ? nil : { baseFile = nil; updateFile = nil; dlcFiles = []; hasSource = false })
+                        if let b = baseFile, let w = BuildView.mismatch(b, wants: "Base game") { Text(w).font(.footnote).foregroundStyle(.orange) }
+                        if !isNup {
+                            slot("Update", updateFile, choose: { pick(.update) }, remove: updateFile == nil ? nil : { updateFile = nil })
+                            if let u = updateFile, let w = BuildView.mismatch(u, wants: "Update") { Text(w).font(.footnote).foregroundStyle(.orange) }
+                            LabeledContent("DLC") {
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    ForEach(dlcFiles, id: \.self) { d in
+                                        HStack {
+                                            Text(d.lastPathComponent).lineLimit(1).truncationMode(.middle).help(d.path)
+                                            Button { dlcFiles.removeAll { $0 == d } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless)
+                                        }
+                                    }
+                                    Button(dlcFiles.isEmpty ? "Add DLC…" : "Add More…") { pick(.dlc) }
+                                }
+                            }
+                        } else {
+                            Text("A Switch 2 .nup holds the whole game: no separate update or DLC files.").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        HStack { Spacer(); Button("Use a Folder Instead…") { pickFolder() }.buttonStyle(.link).font(.footnote) }
                     }
-                    Text("A folder with the game's NSPs (base game, update, DLC), a dump folder, or a Switch 2 game's .nup file. You can also drop it here.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    if hasSource && builder.needsKeys(req.source) {
+                    if hasSource && !isNup && (!files.isEmpty || builder.needsKeys(req.source)) {
                         LabeledContent("prod.keys") {
                             HStack {
                                 Text(builder.keys.isEmpty ? "Not set" : builder.keys).lineLimit(1).truncationMode(.middle)
@@ -291,7 +322,7 @@ struct BuildView: View {
                         }
                     }
                 }
-                if hasSource && Packages.takes(req.source) { PackagesSection(folder: req.source) }
+                if hasSource && baseFile == nil && Packages.takes(req.source) { PackagesSection(folder: req.source) }
                 Section("Build") {
                     Picker("For", selection: $req.target) { ForEach(BuildTarget.allCases) { Text($0.label).tag($0) } }
                     Toggle("Also build the other one", isOn: $both)
@@ -317,19 +348,19 @@ struct BuildView: View {
                     Toggle("iPhone: keep the game files out of the IPA (copied once with push_romfs.sh)", isOn: $req.romfsSeparate)
                 }
                 Section {
-                    if hasSource, let r = GamesFolder.root, !GamesFolder.contains(req.source) {
+                    if hasSource, let r = GamesFolder.root, !files.isEmpty || !GamesFolder.contains(req.source) {
                         Toggle("Put the game's files in your games folder (\(r.lastPathComponent))", isOn: $intoFolder)
                     }
                     if let m = moving { HStack { ProgressView().controlSize(.small); Text(m).font(.footnote) } }
                     Button("Build") { start() }
-                    .buttonStyle(.borderedProminent).disabled(!hasSource || moving != nil || (builder.needsKeys(req.source) && builder.keys.isEmpty))
+                    .buttonStyle(.borderedProminent).disabled(!hasSource || moving != nil || (!isNup && (!files.isEmpty || builder.needsKeys(req.source)) && builder.keys.isEmpty))
                     if let why = builder.ready { Text(why).foregroundStyle(.red).font(.footnote) }
                 }
             }
             .formStyle(.grouped)
             .frame(minWidth: 380)
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                providers.first?.loadObject(ofClass: URL.self) { u, _ in if let u { DispatchQueue.main.async { req.source = u; hasSource = true } } }
+                for pr in providers { _ = pr.loadObject(ofClass: URL.self) { u, _ in if let u { DispatchQueue.main.async { take([u]) } } } }
                 return true
             }
             JobsView().frame(minWidth: 360)
@@ -341,6 +372,7 @@ struct BuildView: View {
             builder.enqueue(r)
             if both { var o = r; o.target = r.target == .mac ? .ios : .mac; builder.enqueue(o) }
         }
+        if !files.isEmpty { assemble(go); return }
         guard intoFolder, let root = GamesFolder.root, !GamesFolder.contains(req.source) else { go(req); return }
         guard GamesFolder.confirmCopy([req.source], to: root) else { return }
         var r = req; moving = "Moving the game's files into \(root.lastPathComponent)…"
@@ -353,11 +385,91 @@ struct BuildView: View {
             }
         }
     }
-    private func pickSource() {
-        let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = true
-        p.message = "Choose the game's NSP folder, a dump folder or a .nup file"
-        if let r = GamesFolder.root, FileManager.default.fileExists(atPath: r.path) { p.directoryURL = r }   // your games folder (Setup Assistant)
-        if p.runModal() == .OK, let u = p.url { req.source = u; hasSource = true }
+    private enum Slot { case base, update, dlc }
+    @ViewBuilder private func slot(_ title: String, _ u: URL?, choose: @escaping () -> Void, remove: (() -> Void)?) -> some View {
+        LabeledContent(title) {
+            HStack {
+                Text(u?.lastPathComponent ?? (title == "Base game" ? "None chosen" : "None")).lineLimit(1).truncationMode(.middle).foregroundStyle(u == nil ? .secondary : .primary).help(u?.path ?? "")
+                Button(u == nil ? "Choose…" : "Change…", action: choose)
+                if let remove { Button(action: remove) { Image(systemName: "minus.circle") }.buttonStyle(.borderless) }
+            }
+        }
+    }
+    private func pick(_ slot: Slot) {
+        let p = NSOpenPanel(); p.canChooseDirectories = false; p.canChooseFiles = true; p.allowsMultipleSelection = slot == .dlc
+        p.message = slot == .base ? "Choose the base game: an .nsp, .xci, .nsz or .xcz file, or a Switch 2 game's .nup" : slot == .update ? "Choose the game's update file" : "Choose the game's DLC files"
+        if let d = (baseFile ?? updateFile)?.deletingLastPathComponent() ?? GamesFolder.root, FileManager.default.fileExists(atPath: d.path) { p.directoryURL = d }
+        guard p.runModal() == .OK else { return }
+        let ok = p.urls.filter { (BuildView.packageTypes + (slot == .base ? ["nup"] : [])).contains($0.pathExtension.lowercased()) }
+        guard !ok.isEmpty else { let a = NSAlert(); a.messageText = "Not a game file"; a.informativeText = "Choose an .nsp, .xci, .nsz or .xcz file\(slot == .base ? ", or a .nup" : "")."; a.runModal(); return }
+        switch slot {
+        case .base: setBase(ok[0])
+        case .update: updateFile = ok[0]
+        case .dlc: dlcFiles += ok.filter { !dlcFiles.contains($0) }
+        }
+    }
+    private func setBase(_ u: URL) {
+        baseFile = u; hasSource = true
+        if u.pathExtension.lowercased() == "nup" { req.source = u; updateFile = nil; dlcFiles = [] } else { req.source = u.deletingLastPathComponent() }   // the folder: the free space shown; the build's source is made at Build
+    }
+    private func pickFolder() {
+        let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = false
+        p.message = "Choose a folder holding the game's files, or a dump folder"
+        if let r = GamesFolder.root, FileManager.default.fileExists(atPath: r.path) { p.directoryURL = r }
+        if p.runModal() == .OK, let u = p.url { baseFile = nil; updateFile = nil; dlcFiles = []; req.source = u; hasSource = true }
+    }
+    /// Dropped files go to their slots by what they are (a .nup or a folder as the source)
+    private func take(_ urls: [URL]) {
+        for u in urls {
+            if u.hasDirectoryPath { baseFile = nil; updateFile = nil; dlcFiles = []; req.source = u; hasSource = true; continue }
+            let e = u.pathExtension.lowercased()
+            if e == "nup" { setBase(u); continue }
+            guard BuildView.packageTypes.contains(e) else { continue }
+            switch BuildView.kind(u) {
+            case "Update": updateFile = u
+            case "DLC": if !dlcFiles.contains(u) { dlcFiles.append(u) }
+            default: setBase(u)
+            }
+        }
+    }
+    /// A file whose title ID says it is something else than its slot: a note under it
+    static func mismatch(_ u: URL, wants: String) -> String? {
+        if u.pathExtension.lowercased() == "nup" { return nil }
+        let k = kind(u)
+        return k == wants || k == "Game file" ? nil : "Its name says it is \(k == "DLC" ? "a DLC" : "an \(k.lowercased())"), not \(wants == "Base game" ? "the base game" : "an update")."
+    }
+    static let packageTypes = ["nsp", "xci", "nsz", "xcz"]
+    /// What a game file is, by the title ID in its name ([0100…000] the base game, …800 its update, anything else a DLC)
+    static func kind(_ u: URL) -> String {
+        guard let m = u.lastPathComponent.range(of: #"\[[0-9A-Fa-f]{16}\]"#, options: .regularExpression) else { return "Game file" }
+        let tid = u.lastPathComponent[m].dropFirst().dropLast().uppercased()
+        return tid.hasSuffix("000") ? "Base game" : tid.hasSuffix("800") ? "Update" : "DLC"
+    }
+    static func order(_ u: URL) -> Int { ["Base game": 0, "Update": 1, "DLC": 2][kind(u)] ?? 3 }
+    /// The picked files copied into a folder of their own (in the games folder when that is on, else beside the base game), which is then built. A copy on the same
+    /// drive is an APFS clone (instant, no space taken); to another drive it is a real copy, asked first. The originals stay where they are
+    private func assemble(_ go: @escaping (BuildRequest) -> Void) {
+        guard let base = files.first(where: { BuildView.kind($0) == "Base game" }) ?? files.first else { return }
+        let parent = intoFolder ? (GamesFolder.root ?? base.deletingLastPathComponent()) : base.deletingLastPathComponent()
+        let dest = GamesFolder.unique(GamesFolder.name(for: base), in: parent)
+        let far = files.filter { !GamesFolder.sameDrive($0, parent) }
+        if !far.isEmpty {
+            let bytes = far.reduce(0) { $0 + GamesFolder.size($1) }
+            let a = NSAlert(); a.messageText = "Copy the files to \(parent.lastPathComponent)?"
+            a.informativeText = "\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) will be copied to the other drive. Your originals stay where they are."
+            a.addButton(withTitle: "Copy"); a.addButton(withTitle: "Cancel")
+            guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
+        var r = req; let list = files; moving = "Putting the game's files in \(dest.lastPathComponent)…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+                for f in list { try FileManager.default.copyItem(at: f, to: dest.appendingPathComponent(f.lastPathComponent)) }
+                DispatchQueue.main.async { r.source = dest; req.source = dest; baseFile = nil; updateFile = nil; dlcFiles = []; moving = nil; go(r) }
+            } catch {
+                DispatchQueue.main.async { moving = nil; let a = NSAlert(); a.messageText = "The files could not be put together"; a.informativeText = error.localizedDescription; a.runModal() }
+            }
+        }
     }
     private func pickKeys() {
         let p = NSOpenPanel(); p.canChooseFiles = true; p.canChooseDirectories = false; p.message = "Choose prod.keys (dumped from your Switch)"
