@@ -1,0 +1,132 @@
+# Cartridge's changes sent to upstream nxnative (docs/launcher.md, Sending changes upstream; docs/upstream.tsv). Daily:
+#   status: dm/tools/upstream_status.py reads each forwarded pull request and upstream's main: a change upstream committed becomes landed <sha> (the fork's copy goes
+#     at the next follow-upstream merge), a declined one fork-only (declined #N); for each pending or forwarded branch on the fork, a merge preview says whether it
+#     still applies. The table is committed when it changes; an issue (label upstream-pr) lists only what needs the owner.
+#   send (opt-in: the repository variable UPSTREAM_PR_AUTO=1; off by default): Claude (anthropics/claude-code-action, secret CLAUDE_CODE_OAUTH_TOKEN) answers review
+#     comments on forwarded pull requests, then takes the first pending change whose base is already upstream, brings its branch up to upstream's main as upstream's
+#     CONTRIBUTING.md asks (one change, its docs, its tests), and opens it as a pull request on seedds/nxnative from the fork: at most one new pull request a run.
+#     Game checks (regress.py check) cannot run on GitHub's Macs: such a pull request says so, and the owner's Mac runs them when asked.
+# Pull request branches live on the fork as pr/<id>. UPSTREAM_TOKEN (follow-upstream.yml) pushes and opens them.
+name: upstream-prs
+
+on:
+  schedule:
+    - cron: '47 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: upstream-prs
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: seedds/nxnative
+  BRANCH: launcher
+  GH_TOKEN: ${{ secrets.UPSTREAM_TOKEN || github.token }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_TOKEN || github.token }}
+      - name: Upstream's main and the fork's pull request branches
+        run: |
+          git remote add upstream "https://github.com/$UPSTREAM"
+          git fetch -q upstream main
+          git fetch -q origin 'refs/heads/pr/*:refs/heads/pr/*' || true
+      - name: Status
+        run: |
+          set -euo pipefail
+          python3 dm/tools/upstream_status.py --update --upstream-ref upstream/main --attention attention.md | tee -a "$GITHUB_STEP_SUMMARY"
+          if ! git diff --quiet -- docs/upstream.tsv; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -q -m "docs/upstream: statuses from upstream" -- docs/upstream.tsv
+            git push -q origin "HEAD:$BRANCH"
+          fi
+      - name: Tell the owner what needs them
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          n=$(gh issue list --state open --label upstream-pr --json number --jq '.[0].number // ""' 2> /dev/null || true)
+          if [ ! -f attention.md ]; then
+            if [ -n "$n" ]; then gh issue close "$n" --comment "Nothing needs a look any more."; fi
+            exit 0
+          fi
+          gh label create upstream-pr --color 0e8a16 --description "Cartridge changes sent upstream" 2> /dev/null || true
+          if [ -n "$n" ]; then gh issue comment "$n" --body-file attention.md; else gh issue create --title "Upstream pull requests need a look" --label upstream-pr --body-file attention.md; fi
+
+  send:
+    needs: status
+    if: vars.UPSTREAM_PR_AUTO == '1'
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      GAME: 010015100B514000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_TOKEN }}
+      - name: Upstream's main and the fork's pull request branches
+        run: |
+          git pull -q --ff-only origin "$BRANCH"   # the status job's commit
+          git remote add upstream "https://github.com/$UPSTREAM"
+          git fetch -q upstream main
+          git fetch -q origin 'refs/heads/pr/*:refs/heads/pr/*' || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Install the Python packages the tools import
+        run: python -m pip install lz4 "capstone>=5,<6" fonttools
+      - name: Claude answers reviews and sends the next change
+        uses: anthropics/claude-code-action@5342e104274fd0a0f168e0fe9eb2cbb1a781f447 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.UPSTREAM_TOKEN }}
+          claude_args: --max-turns 200 --allowedTools Bash,Read,Edit,Write,Glob,Grep
+          prompt: |
+            You keep Cartridge's changes moving upstream to github.com/${{ env.UPSTREAM }}. Read AGENTS.md, CONTRIBUTING.md, docs/launcher.md (Sending changes
+            upstream) and docs/upstream.tsv first. Branches are on the fork (remote origin) as the table's `branch`; upstream's main is `upstream/main`.
+            1. Reviews: for each row `forwarded ${{ env.UPSTREAM }}#N`, read the pull request's reviews and comments (`gh pr view N --repo ${{ env.UPSTREAM }} --comments`).
+               Where a maintainer asked for changes you have not answered, make them on the branch, run the checks CONTRIBUTING.md names for what the change
+               touches (the GPU and game checks cannot run here: say so), push the branch (`git push origin <branch>`) and reply on the pull request with what
+               changed. Never argue a declined change; leave it.
+            2. Send: take the first row with status `pending` whose `base` is `-` or a row that is `landed` (none whose base is still pending or forwarded). Rebase
+               its branch on upstream/main (`git rebase upstream/main`, resolving conflicts so the change still does what its commit says), regenerate what
+               upstream's rules ask (`dmsh_chain.py --header` after a chain change, `docs_symptoms.py` after docs/reference changes), run the checks, push it to
+               origin with `--force-with-lease`, and open it: `gh pr create --repo ${{ env.UPSTREAM }} --base main --head ${{ github.repository_owner }}:<branch>`
+               with the title of its commit and a body as upstream's pull request template asks: what and why (from the commit message), what was checked
+               (the tests you ran, the game checks from the commit message or "not run: GitHub's Macs have no Metal 4"), the docs changed. No mention of Cartridge.
+               Open at most one pull request.
+            3. Record it: in docs/upstream.tsv set that row's status to `forwarded ${{ env.UPSTREAM }}#<number>`, commit
+               ("docs/upstream: <id> forwarded as #<number>") and push to origin ${{ env.BRANCH }}.
+            If a step cannot be done properly (a conflict that changes what the change does, a failing check you cannot fix), do not send it: write why to
+            claude-report.md (not committed) and stop.
+      - name: Tell the owner when Claude stopped
+        if: always()
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [ -f claude-report.md ] || exit 0
+          gh label create upstream-pr --color 0e8a16 --description "Cartridge changes sent upstream" 2> /dev/null || true
+          gh issue create --title "An upstream pull request needs a look" --label upstream-pr --body-file claude-report.md

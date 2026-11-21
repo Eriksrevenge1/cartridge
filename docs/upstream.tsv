@@ -1,0 +1,30 @@
+# Cartridge's changes to upstream nxnative's files, and where each stands upstream (docs/launcher.md, Sending changes upstream; dm/tools/upstream_status.py keeps it current).
+# status: pending (meant for upstream, no pull request yet) | forwarded seedds/nxnative#N (a pull request is open; the row goes when it lands) |
+#         landed <upstream sha> (upstream has it: the fork's copy goes at the next merge) | fork-only (<reason>, or declined #N: stays in the fork)
+# branch: the pull request's branch (off upstream's main, or off the branch named in base); base: the row it builds on, - for upstream's main
+id	title	status	branch	base	fork_commits	notes
+monolith-split	chain/split: read the shaders of Monolith's DMPA model packages and NDSR packs	pending	pr/monolith-split	-	05faaf12 391a7fb9	regress.py chain on Xenoblade Chronicles 3: PASS (27,055 shaders unchanged)
+xc2-ns2	game/xc2-ns2: add Xenoblade Chronicles 2's Switch 2 Edition profile	pending	pr/xc2-ns2	monolith-split	7fd3f7b6	the mods and cheats section stays in the fork until mods-* land
+xcde-ns2	game/xcde-ns2: add Xenoblade Chronicles: Definitive Edition's Switch 2 Edition profile	pending	pr/xcde-ns2	monolith-split	b93fdc57	the mods and cheats section stays in the fork until mods-* land
+display-120	gfx/vi: a Switch 2 display at 120 Hz, and the 120 Hz link on every 120 Hz screen	pending	pr/display-120	-	13ffd5ec 32f4abeb	without frame generation (removed) and auto-HDR
+auto-hdr	gfx/present: auto-HDR on a screen with HDR on (Mac and iOS)	pending	pr/auto-hdr	-	5afbc4bf 0bc6e0e9	SDR output unchanged
+mac-fullscreen	host/front_mac: fullscreen's mode switch once and settled before the display link, the screen by name	pending	pr/mac-fullscreen	display-120	0135a4bf 456febc7	DM_SCREEN by name; display.screen preference
+link-probation	nvn/present: a display link tried again after a rescue is on probation	pending	pr/link-probation	-	ca22e754	the probation part of ca22e754 only
+fstep-link	nvn/fstep: judge frames around display-link events by their GPU time	pending	pr/fstep-link	-	a13f118b
+controls-file	host/input: the player's controls file (button map, keyboard map, mouse as a stick)	pending	pr/controls-file	-	dcba5faa	controls.h; the controls card needs it
+controls-card	host/front_mac: a controls card showing the keyboard and mouse map (⌘/)	pending	pr/controls-card	controls-file	0557e27f
+mac-screenshots	host/front_mac: screenshots from the Capture button and Window → Take Screenshot	pending	pr/mac-screenshots	-	b54e919d	without the Home tap opening Cartridge
+mods-exefs	host/exefs: apply mods' IPS, IPS32 and pchtxt patches to the loaded modules	pending	pr/mods-exefs	-	bdeb3cc3
+mods-archives	host/fs: mod folders for add-on content, and mod files packed into ARH1 archives	pending	pr/mods-archives	-	bdeb3cc3
+mac-mods	mac: a mods folder per game, turned on by mods.txt	pending	pr/mac-mods	-	dcba5faa	launcher.c mods_overlay
+bdat-port	scripts/bdat_port: port Monolith table mods to another version of the game's data	pending	pr/bdat-port	-	22ab1383
+cheat-anchor-bss	tools/cheat_anchor: bound .bss by the module's end, not the loaded image	pending	pr/cheat-anchor-bss	-	20440050
+rebuild-keeps-icon	scripts/build_ipa_from_nsp: a Mac app rebuilt in place keeps its icon	pending	pr/rebuild-keeps-icon	-	0c3132de
+bench-lang	scripts/bench: start the game in the build's default language	pending	pr/bench-lang	-	ca22e754	the bench.py part of ca22e754 only
+launcher	Cartridge itself (dm/launcher: library, builds, settings, updates, the engine it carries)	fork-only (Cartridge, the fork's product)	-	-	dcba5faa 71d970ad 2c22d3c4 9656b2e6 80065ce9 74ab8c96
+home-opens-cartridge	the Home tap and View+Menu opening Cartridge	fork-only (Cartridge: needs the launcher app)	-	-	b54e919d 56d411a4	home_quit.h, front_mac.m
+engine-fingerprint	pack_app.py's engine commit and fingerprint (ENGINE_COMMIT, ENGINE_GAMEHASH, DMEngineHash)	fork-only (Cartridge: the engine it carries)	-	-	80065ce9
+release-scripts	scripts/build_launcher.py and scripts/release_cartridge.py	fork-only (Cartridge's build and releases)	-	-	80065ce9 74ab8c96
+follow-upstream	.github/workflows/follow-upstream.yml, upstream-prs.yml and their test script	fork-only (the fork following upstream)	-	-	75dea7bd 461b83d5 6abe05e0
+md-merge	dm/tools/md_merge.py and .gitattributes (the fork's Markdown merge driver)	fork-only (the fork following upstream)	-	-	6abe05e0
+notify-owner	.github/workflows/notify-owner.yml (the owner hears of new issues and pull requests)	fork-only (the fork's own issues)	-	-	-

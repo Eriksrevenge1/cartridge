@@ -7,12 +7,49 @@
 It needs the GitHub CLI signed in (gh auth login) with the git remote named "fork" pointing at your fork, and a clean checkout: the release is the commit
 your branch is at, pushed to the fork first. Cartridge is built into a work folder (on the games folder's drive when one is set: about 2 GB), not over your
 installed copy, zipped as Cartridge.zip and published as cartridge-<build> (the commit count, the build number Cartridge compares), with the commit titles since the
-last release as its notes. Exit status 0 when published (or, --dry-run, built), 1 on an error.
+last release as its notes, kept to what players notice (player_notes). It refuses a build number not above the newest release's: no update goes backwards.
+Exit status 0 when published (or, --dry-run, built), 1 on an error.
 """
 import argparse, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Release notes: commit titles by what a player notices, from their area (the part before the colon, split at "/") or a game's name in the title; the rest is counted
+AREAS = [
+    ('Games', {'game', 'games'}),
+    ('Display, controls and sound', {'vi', 'present', 'front_mac', 'front_ios', 'input', 'hid', 'pad', 'audio', 'mac', 'ios', 'controls', 'display', 'fstep', 'link', 'screen'}),
+    ('Cartridge', {'launcher'}),
+]
+
+
+def game_names():   # the games table's names (dm/games/README.md), for titles that name a game
+    try: text = (ROOT / 'dm/games/README.md').read_text()
+    except OSError: return []
+    return [n for n in re.findall(r'^\| \[([^\]]+)\]\(', text, re.M) if len(n) >= 6]
+
+
+def player_notes(subjects, names=()):
+    """Release notes from commit titles: grouped by AREAS, a title naming a game under Games, merges left out, the rest counted"""
+    groups, other = {g: [] for g, _ in AREAS}, 0
+    for t in subjects:
+        t = t.strip()
+        if not t or t.startswith(('merge ', 'Merge ')): continue
+        area = t.split(':', 1)[0] if ':' in t else ''
+        words = set(area.replace('-', '/').split('/'))
+        group = next((g for g, keys in AREAS if words & keys), None)
+        if not group and any(n in t for n in names): group = 'Games'
+        if group: groups[group].append(t)
+        else: other += 1
+    out = []
+    for g, items in groups.items():
+        if items: out += [f'{g}:'] + [f'- {t}' for t in items] + ['']
+    if other: out.append(f'And {other} other engine change{"s" if other != 1 else ""} (shaders, memory, services, tools).')
+    return '\n'.join(out).strip() or 'No changes players notice.'
+
+
+def newest_build(tags):   # the highest cartridge-<build> among release tags, 0 when none
+    return max((int(t[len('cartridge-'):]) for t in tags if re.fullmatch(r'cartridge-\d+', t)), default=0)
 
 
 def run(cmd, **kw):
@@ -34,7 +71,8 @@ def main():
     build = int(run(['git', '-C', ROOT, 'rev-list', '--count', 'HEAD']))
     tag = f'cartridge-{build}'
     if not a.dry_run:
-        if subprocess.run(['gh', 'release', 'view', tag, '--repo', repo], capture_output=True).returncode == 0: sys.exit(f'release_cartridge: {tag} exists already: commit something first')
+        tags = run(['gh', 'release', 'list', '--repo', repo, '--limit', '100', '--json', 'tagName', '--jq', '.[].tagName']).split()
+        if newest_build(tags) >= build: sys.exit(f'release_cartridge: cartridge-{newest_build(tags)} is out already, and this is build {build}: a release never goes backwards (commit something first)')
         run(['git', '-C', ROOT, 'push', 'fork', branch])
     games = subprocess.run(['defaults', 'read', 'org.nxnative.launcher', 'games.root'], capture_output=True, text=True).stdout.strip()
     base = Path(games) if games and Path(games).is_dir() else None
@@ -54,8 +92,8 @@ def main():
             for p in prev:
                 r = subprocess.run(['git', '-C', ROOT, 'rev-list', '-n', '1', p], capture_output=True, text=True)
                 if r.returncode == 0: since = r.stdout.strip(); break
-            log = run(['git', '-C', ROOT, 'log', '--format=- %s', f'{since}..HEAD' if since else '-15'])
-            notes = 'Changes:\n' + log
+            log = run(['git', '-C', ROOT, 'log', '--no-merges', '--format=%s', f'{since}..HEAD' if since else '-15'])
+            notes = player_notes(log.splitlines(), game_names())
         cmd = ['gh', 'release', 'create', tag, zip_, '--repo', repo, '--target', sha, '--title', f'Cartridge 1.{build}', '--notes', notes]
         print(run(cmd))
 
