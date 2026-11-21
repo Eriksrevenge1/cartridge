@@ -6603,6 +6603,7 @@ static os_unfair_lock g_rmu = OS_UNFAIR_LOCK_INIT;
 // ---------- Shader mapping table: Switch control section hash → PC metallib (produced by dm/gfx/tools/shader_map.py) ----------
 static NSMutableDictionary<NSString *, NSString *> *g_shmap;
 static NSString *g_shmap_path, *g_msl_dir;
+#include "nvn_live.inc"
 // The library may be one file beside its folder, b-<chain>.img (dm/tools/shader_lib.py, msl_image.h), read in place. Each file comes from the folder first: what a partial dmsh_build.py run rebuilt goes
 // over the image, a build folder from before the image works as it did, and a host running from a folder goes on when a build packs it (the image is whole before the folder goes). So the image is
 // opened at the first file the folder lacks, and tried again each time while it is not there. img: the image the entry is in
@@ -6626,7 +6627,10 @@ static NSData *msl_data(NSString *path) {   // a file of the library, nil when i
     NSData *d = [NSData dataWithContentsOfFile:path];
     if (d) return d;
     romfs_img *m; const img_ent *x = msl_image_file(path, &m);
-    if (!x) return nil;
+    if (!x) {
+        NSString *live = live_artifact(path.lastPathComponent);
+        return live ? [NSData dataWithContentsOfFile:live] : nil;
+    }
     NSMutableData *o = [NSMutableData dataWithLength:(NSUInteger)x->b];
     return romfs_image_read(m->fd, o.mutableBytes, (size_t)x->b, (off_t)x->a) ? o : nil;
 }
@@ -6636,7 +6640,7 @@ static NSString *exe_rel(const char *rel) {
     char *dir = dirname(buf);
     return [NSString stringWithFormat:@"%s/%s", dir, rel];
 }
-// Shader mapping table (output of tools/shader_map.py): at runtime only 'Switch control section key → stage' is used; shaders are always translations of the Switch originals (tools/dmsh_build.py produces <key>_b.metallib + reflection offline)
+// Shader mapping table (output of tools/shader_map.py): only 'Switch control section key → stage' is used. The Mac development compiler can add translations of new stages separately.
 static void shmap_read(void);
 static void warm_start(void);
 // The shader map, the library directory and its tables, read once from any thread (the prefetch, mtl_prog_prefetch, runs on the game's threads)
@@ -6701,7 +6705,7 @@ static void shmap_read(void) {
 
 @interface NvShader : NSObject { @public id<MTLFunction> fn, tf_fn, discard_fn, fn_d, geo_fn; NSString *u_name; id<MTLLibrary> ulib; NSMutableDictionary *ufn; int u_side, ulib_state, u_alpha, u_logic;   // u_name: the typed-output entry point (dmsh_entry.py fs_uint), nil when the shader has none; in the side library <key>_bx when u_side, else in its own (ulib: that library, loaded on first need when u_side; ulib_state as afn_state); ufn: it specialized per pipeline's target classes, alpha test and logic operation (typed_fn); u_alpha / u_logic: it holds those two (the reflection's entry_u_alpha, entry_u_logic); fn_d: the dual-source one (dmsh_entry.py fs_dual)
     id<MTLLibrary> xlib; int xlib_state;   // the side library <key>_bx, loaded once on first need (bx_lib) for at_fn, lo_fn and typed_fn
-    uint16_t tf_stride[4]; uint32_t cb_ext[16], sb_ro; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage, layer_out; const char *builtin; uint64_t logged; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
+    uint16_t tf_stride[4]; uint32_t cb_ext[16], sb_ro; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage, layer_out, viewport_mask; const char *builtin; uint64_t logged; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
     NSDictionary *rtMetadata;   // immutable RT runtime/catalog JSON, present only for the universal RT library
     uint32_t geo_vertices, geo_invocations, geo_output, geo_stride, geo_index_stride;
     uint8_t mesh_kind, mesh_notask; uint16_t mesh_threads, mesh_payload;   // an NVN2 task (1) or mesh (2) shader, a mesh shader with no task, its workgroup's threads, its payload's bytes (dmsh_meshstage.py)
@@ -6871,7 +6875,25 @@ static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
     if (fd < 0) {   // not in the folder: the library's image, whose one descriptor is shared, and only this file's pages are mapped
         int open_errno = errno; romfs_img *img; const img_ent *x = msl_image_file(path, &img); msl_map f;
         if (x && msl_image_map(img, x, &f)) return lib_from_map(f, err);
-        if (!x) errno = open_errno;
+        NSString *live = !x ? live_artifact(path.lastPathComponent) : nil;
+        if (live) {
+            fd = open(live.fileSystemRepresentation, O_RDONLY);
+            if (fd < 0) {
+                NSString *sourcePath = [[live stringByDeletingPathExtension] stringByAppendingString:@".runtime.metal"];
+                NSString *source = [NSString stringWithContentsOfFile:sourcePath encoding:NSUTF8StringEncoding error:nil];
+                if (source) {
+                    MTLCompileOptions *options = [MTLCompileOptions new];
+                    options.languageVersion = MTLLanguageVersion4_0;
+                    options.preserveInvariance = YES;
+                    options.mathMode = MTLMathModeRelaxed;
+                    plain_compile_begin();
+                    NSError *error = nil;
+                    id<MTLLibrary> lib = [g_dev newLibraryWithSource:source options:options error:&error];
+                    return lib_tag(compile_done(lib, error, err), lib_digest(source.UTF8String, [source lengthOfBytesUsingEncoding:NSUTF8StringEncoding]));
+                }
+            }
+        }
+        else if (!x) errno = open_errno;
     }
     if (fd < 0 || fstat(fd, &st) || st.st_size <= 0) { if (fd >= 0) close(fd); if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"cannot open %@", path]}]; return nil; }
     size_t len = (size_t)st.st_size; void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0); int map_errno = errno; close(fd);
@@ -7074,7 +7096,7 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
     if (o->mesh_notask && !(o->mesh_obj = j[@"entry_object"] ? fn4_note([lib newFunctionWithName:j[@"entry_object"]], lib, j[@"entry_object"], nil) : nil))
         MLOG("[RED] mesh shader %s: no object entry point (entry_object) in its library: its draws are skipped", pc.UTF8String);
     // writes the layer: its passes are layered and its pipelines get an input class (pso_desc). main0 / main0_z by the reflection's layer_out (dmsh_entry.py layer_out), the layer entry points always
-    if (stage == 0) o->layer_out = layer || [j[@"layer_out"] boolValue];
+    if (stage == 0) { o->layer_out = layer || [j[@"layer_out"] boolValue]; o->viewport_mask = !layer && [j[@"viewport_mask"] boolValue]; }
     if (stage == 0 && !layer) o->has_pull = [j[@"pull"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) o->has_alpha = [j[@"alpha"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) o->has_bz = [j[@"blend_zero"] boolValue];
@@ -7122,6 +7144,9 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
 }
 // The part of uniform slot reg's binding the shader can read: its first cb_ext bytes when cb_extent.tsv bounds them, else the whole binding
 static inline uint64_t cb_len(NvShader *sh, int reg, uint64_t size) { uint32_t e = sh && reg >= 0 && reg < 16 ? sh->cb_ext[reg] : 0; return e && e < size ? e : size; }
+static NSString *shader_stage(NSString *key) {
+    return g_shmap[key] ?: live_lookup(key)[@"stage"];
+}
 static int stage_of(NSString *stage) {
     if ([stage isEqualToString:@"vertex"]) return 0; if ([stage isEqualToString:@"pixel"]) return 1; if ([stage isEqualToString:@"compute"]) return 5;
     if ([stage isEqualToString:@"hull"]) return 3; if ([stage isEqualToString:@"domain"]) return 4; if ([stage isEqualToString:@"geometry"]) return 2;
@@ -7223,7 +7248,7 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
         // Key = sha256(first 0x880 bytes of the control section + code area): many of Mario's shaders share a control section but differ in code (dm/gfx/tools/shader_split.py). It was computed at SetShaders (hle_nvn.c): by now the game may have freed the control section
         uint8_t md[8]; if (!prog_key(p, i, md)) MDIE("program stage %u has no shader key", i);
         NSString *k = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
-        NSString *stage = g_shmap[k];
+        NSString *stage = shader_stage(k);
         if (!stage) {   // Not in the package: look up the compute kernels embedded in the main body (nvn_builtin.h)
             NvShader *b = builtin_get(k.UTF8String);
             if (b) { o->sh[5] = b; o->stages |= (uint8_t)(1u << 5); continue; }
@@ -7275,7 +7300,7 @@ static uint8_t prog_stage_mask(const prog_t *p) {
         if (!prog_key(p, i, md)) { m |= PROG_ST_UNKNOWN; continue; }
         char hx[17];
         snprintf(hx, sizeof hx, "%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]);
-        NSString *stage = g_shmap[@(hx)];
+        NSString *stage = shader_stage(@(hx));
         if (stage) m |= prog_stage_bit(stage);
         else m |= builtin_has(hx) ? (uint8_t)(1u << 5) : (uint8_t)PROG_ST_UNKNOWN;
     }
@@ -7348,7 +7373,8 @@ static void treg_sparse_notes(void) {
     os_unfair_lock_lock(&g_rmu);
     for (size_t i = 0; i < g_ntreg_sp; i++) {
         int id_ = g_treg_sp[i]; treg_t *rp = &g_treg[id_];
-        if (!rp->ok || !rp->t.pool || !nvn_sparse_pool(rp->t.pool)) { rp->sp = 0; continue; }
+        // Pool finalization marks its descriptors gone under g_rmu before the object may be freed.
+        if (!rp->ok || rp->gone || !rp->t.pool || !nvn_sparse_pool(rp->t.pool)) { rp->sp = 0; continue; }
         g_treg_sp[w++] = id_;
         uint64_t lo = (uint64_t)(uintptr_t)rp->t.mem, hi = lo + rp->t.L.size;
         int hit = n < 0;
@@ -7671,7 +7697,8 @@ void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
     // registrations KTGL (Age of Calamity) makes before every bind repeat the ID's texture; the rest cycle textures through its IDs (the view cache below, vc_get)
     treg_t *rr = &g_treg[id_];
     int same = t && rr->ok && rr->has_v == (v != NULL) && !memcmp(&rr->t, t, sizeof *t) && (!v || !memcmp(&rr->v, v, sizeof *v));
-    if (rr->gone) { rr->gone = 0; reg_bump(id_, 0); if (rr->ok) bcp_idx(id_, &rr->t, 1); }   // registered again (pool storage made anew), even with the same data; a pair side again
+    int was_gone = rr->gone;
+    if (was_gone) { rr->gone = 0; reg_bump(id_, 0); if (rr->ok) bcp_idx(id_, &rr->t, 1); }   // registered again (pool storage made anew), even with the same data; a pair side again
     if (!same) {
         // The read mark (pool_seen) is the ID's: shaders read an ID, whatever texture the game puts into it, so the mark stays while the ID holds a texture and the next walk makes the new
         // one under the read budget (POOL_REQ_BYTES). Cleared on every change, it left a streamed replacement to the walk's room (pool_room), which is 0 once pool_budget() is spent:
@@ -7691,12 +7718,13 @@ void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
             if (rr->next) g_treg[rr->next - 1].prev = id_ + 1;
             nvn_hm_put(&g_treg_serial, &t->serial, (void *)(uintptr_t)(id_ + 1));
         }
-        if (t && !rr->sp && t->pool && nvn_sparse_pool(t->pool)) {   // its pages follow the game's mappings (treg_sparse_notes)
-            if (g_ntreg_sp == g_treg_sp_cap) { g_treg_sp_cap = g_treg_sp_cap ? g_treg_sp_cap * 2 : 256; g_treg_sp = realloc_or_die(g_treg_sp, g_treg_sp_cap * sizeof *g_treg_sp, "the sparse texture IDs"); }
-            g_treg_sp[g_ntreg_sp++] = id_; rr->sp = 1;
-        }
-        if (id_ < (1 << 20)) atomic_store_explicit(&g_tser[id_], t ? t->serial : 0, memory_order_release);
     }
+    // The scan can remove a gone ID before an identical registration revives it.
+    if ((!same || was_gone) && t && !rr->sp && t->pool && nvn_sparse_pool(t->pool)) {
+        if (g_ntreg_sp == g_treg_sp_cap) { g_treg_sp_cap = g_treg_sp_cap ? g_treg_sp_cap * 2 : 256; g_treg_sp = realloc_or_die(g_treg_sp, g_treg_sp_cap * sizeof *g_treg_sp, "the sparse texture IDs"); }
+        g_treg_sp[g_ntreg_sp++] = id_; rr->sp = 1;
+    }
+    if (!same && id_ < (1 << 20)) atomic_store_explicit(&g_tser[id_], t ? t->serial : 0, memory_order_release);
     os_unfair_lock_unlock(&g_rmu);
     {   // DM_NVN_TREG_ID=n logs every registration of texture ID n: what it holds from then on, and when (the frame being recorded)
         static int want = -2; if (want == -2) { const char *e = getenv("DM_NVN_TREG_ID"); want = e ? atoi(e) : -1; }
@@ -9069,10 +9097,12 @@ static uint64_t vk_get(const vk_key *k, uint64_t src, uint64_t es) {
     id<MTLBuffer> b = [g_dev newBufferWithLength:(NSUInteger)bytes options:MTLResourceStorageModeShared];
     if (!b) return 0;
     uint64_t pg = (uint64_t)getpagesize(), plo = (src + pg - 1) & ~(pg - 1), phi = (src + sn) & ~(pg - 1), pn = phi > plo ? phi - plo : 0;
+    uint64_t head = pn ? plo - src : sn, tail = pn ? src + sn - phi : 0;
+    e->edge = malloc((size_t)(head + tail) + 1);
+    if (!e->edge) { e->retry = g_sub_serial + 1; return 0; }
     e->lo = src; e->n = sn; e->plo = plo; e->pn = pn; e->span = span;
     e->stamp = e->seen = nvn_dirty_now(); if (pn) nvn_dirty_protect((const void *)(uintptr_t)plo, (size_t)pn);   // take the stamp, protect, then read (as ix_range)
-    uint64_t head = pn ? plo - src : sn, tail = pn ? src + sn - phi : 0;
-    e->edge = malloc((size_t)(head + tail) + 1); memcpy(e->edge, (const void *)(uintptr_t)src, (size_t)head); memcpy(e->edge + head, (const void *)(uintptr_t)(src + sn - tail), (size_t)tail);
+    memcpy(e->edge, (const void *)(uintptr_t)src, (size_t)head); memcpy(e->edge + head, (const void *)(uintptr_t)(src + sn - tail), (size_t)tail);
     float *d = (float *)b.contents;
     vconv_fill((int)k->fmt, src, k->stride, k->nv, d);
     if (k->nt > k->nv) { static const uint8_t zeros[16]; vconv_fill((int)k->fmt, (uint64_t)(uintptr_t)zeros, 0, k->nt - k->nv, d + 4 * k->nv); }
@@ -10199,6 +10229,12 @@ static ArchEpoch *ep_enter(void) {   // the current period, joined: a flush hand
     return ep;
 }
 static void ep_leave(ArchEpoch *ep) { atomic_fetch_sub(&ep->active, 1); dispatch_group_leave(ep->busy); }
+extern _Atomic uint64_t dm_present_ns;   // hle_thread.c, updated by present_enqueue
+enum { ARCH_FLUSH_INTERVAL_S = 10 };
+static int arch_recent_present(void) {
+    uint64_t last = atomic_load_explicit(&dm_present_ns, memory_order_relaxed);
+    return last && now_ns() - last < ARCH_FLUSH_INTERVAL_S * (uint64_t)NSEC_PER_SEC;
+}
 // A period's serialization (arch_write_file) and a pipeline compile do not overlap. Metal frees entries of its compiled-binary cache while it serializes a period's archive, and
 // a compile under way through another compiler then reads one: SIGSEGV in MultiLevelAirntBinaryCache::getElementAtDestination under newRenderPipelineStateWithDescriptor,
 // every time with the MTLBinaryArchive_Serialize thread in airntSerializeToURL (Super Mario Party's prebuild of 39,111 pairs, three crashes on an M4 Pro with macOS 27.2,
@@ -10233,6 +10269,14 @@ static int ser_begin(void) {
     static _Atomic int told; if (left && !atomic_exchange(&told, 1)) MLOG("pipeline archive: %d compiles still under way after %d ms (%d plain): %s", left, SER_WAIT_MS, plain,
         plain ? "the period is not written before those compiles report their errors" : "the write goes ahead beside captures of other periods (Metal may crash on that, see ser_begin)");
     return plain;
+}
+// An optional windowed write must be ready to serialize now. Leave the current period in place if play has resumed or any compile is still under way.
+static int ser_try_begin(void) {
+    pthread_mutex_lock(&g_ser_mu);
+    int ready = !g_ser_compiles && !g_ser_want && !arch_recent_present();
+    if (ready) g_ser_want++;
+    pthread_mutex_unlock(&g_ser_mu);
+    return ready;
 }
 static void ser_end(void) { pthread_mutex_lock(&g_ser_mu); g_ser_want--; pthread_cond_broadcast(&g_ser_cv); pthread_mutex_unlock(&g_ser_mu); }
 // A flush period's size. Metal keeps each serializer's state in an LMDB environment of fixed map size (10 MB, in its own com.apple.gpuarchiver/gpuarchiver-* folder under the
@@ -10647,15 +10691,15 @@ static id<MTLComputePipelineState> cps_new_b(id<MTLFunction> f, int off, NSError
 static id<MTLComputePipelineState> cps_new(id<MTLFunction> f, NSError **e) { return cps_new_b(f, 0, e); }
 // Writes one flush period's captures as the next file of the archive, on g_arch_q once every compile in the period has returned
 static void arch_compact_finish(void);
-static void arch_write_file(ArchEpoch *ep);
-static void arch_write(ArchEpoch *ep) {
-    arch_write_file(ep);
+static void arch_write_file(ArchEpoch *ep, int gate_held);
+static void arch_write(ArchEpoch *ep, int gate_held) {
+    arch_write_file(ep, gate_held);
     if (ep->compacting && atomic_fetch_sub(&g_compact_periods, 1) == 1 && atomic_load(&g_compact_closed)) arch_compact_finish();   // the compaction's last period to be written
 }
-static void arch_write_file(ArchEpoch *ep) {
+static void arch_write_file(ArchEpoch *ep, int gate_held) {
     int n = atomic_load(&ep->n), vd = atomic_load(&ep->vd), cs = atomic_load(&ep->cs), ms = atomic_load(&ep->ms);   // exact: no compile of the period is under way
-    if (!n) return;
-    int plain = ser_begin();   // a plain compile may report service death only after Metal's retries: an expired wait cannot certify this period
+    if (!n) { if (gate_held) ser_end(); return; }
+    int plain = gate_held ? 0 : ser_begin();   // a plain compile may report service death only after Metal's retries: an expired wait cannot certify this period
     int crashed = atomic_load(&ep->crashed) || ep->deaths != atomic_load(&g_arch_deaths);
     if (crashed || plain) {
         ser_end();
@@ -10687,10 +10731,11 @@ static void arch_write_file(ArchEpoch *ep) {
              (unsigned long long)atomic_load(&g_ser_holds), atomic_load(&g_ser_held_ns) / 1e6);
     }
 }
-// A flush: the compiles from here on capture into a new period, and the current one is written once its compiles have returned. Returns at once, on any thread; a compile that
+// A flush: the compiles from here on capture into a new period, and the current one is written once its compiles have returned. Except for the windowed timer on g_arch_q, a flush
+// returns at once on any thread; a compile that
 // does not return holds back only its own period's file. only: hand over that period alone, and only while it is the current one (a full period, a failed capture); those go
 // ahead during the prewarm, where the timer's flushes wait so that its bases, compiled or captured again, make as few files as they can: a cold start's timer flushes wrote a
-// file each 10 s (Ocarina of Time: 80 files; GitHub issue #1747's, 43), more than PSO_ARCH_COMPACT, and the next start compacted them all. any_time: hand it over during the
+// file each 10 s (Ocarina of Time: 80 files; GitHub issue #1747's, 43), more than PSO_ARCH_COMPACT, and the next start compacted them all. ARCH_FLUSH_NOW: hand it over during the
 // prewarm too (going to the background, quitting: mtl_arch_save)
 // A timer flush during a prewarm the game plays through (g_warm_bg; DM_PSO_ARCH_WARM_FLUSH_MS, default 60000; 0: none, the prewarm writes full periods alone): the period is handed
 // over once it is that old, and each next one waits twice as long, up to 16 times (60 s, 120 s, ... 16 min), so a long cold start's prewarm adds a file per doubling and not one per
@@ -10705,19 +10750,28 @@ static int arch_warm_flush_due(void) {
     uint64_t wait_ns = ((uint64_t)g_warm_flush_ms << MIN(atomic_load(&g_warm_flushes), 4)) * NSEC_PER_MSEC;
     return bp_now() - atomic_load(&g_ep_t0) >= wait_ns;
 }
-static void arch_hand_over(ArchEpoch *only, int any_time) {
+enum ArchFlush { ARCH_FLUSH_NORMAL, ARCH_FLUSH_NOW, ARCH_FLUSH_TIMER };
+// Returns 1 when a windowed timer needs to try again. The timer claims the Metal serialization gate before detaching the period and writes it on this queue right away.
+static int arch_hand_over(ArchEpoch *only, enum ArchFlush mode) {
     int warm_due = 0;
-    if (!g_arch_cap || (!only && !any_time && atomic_load(&g_warm_running) && !(warm_due = arch_warm_flush_due()))) return;
-    os_unfair_lock_lock(&g_ep_lock); int any = (!only || g_ep == only) && (atomic_load(&g_ep->n) || atomic_load(&g_ep->active) || atomic_load(&g_ep->crashed)); os_unfair_lock_unlock(&g_ep_lock);
+    if (!g_arch_cap || (!only && mode != ARCH_FLUSH_NOW && atomic_load(&g_warm_running) && !(warm_due = arch_warm_flush_due()))) return 0;
+    int windowed_timer = mode == ARCH_FLUSH_TIMER && mtl_has_window();
+    if (windowed_timer && arch_recent_present()) return 1;
+    os_unfair_lock_lock(&g_ep_lock);
+    int active = atomic_load(&g_ep->active);
+    int any = (!only || g_ep == only) && (atomic_load(&g_ep->n) || active || atomic_load(&g_ep->crashed));
+    os_unfair_lock_unlock(&g_ep_lock);
+    if (windowed_timer && active) return 1;
     // nothing captured or under way: the period goes on. A compaction due to close (the prewarm over, no recapture queued) closes all the same: its recaptures are all in periods
     // handed over, and the last of them to be written finishes it, or this does when they all are (before, it stayed open for the run and the next start compacted again)
     if (!any) {
         if (!only && g_compact_enabled && atomic_load(&g_compacted) && !atomic_load(&g_warm_running) && !atomic_load(&g_compact_harvests) && !atomic_exchange(&g_compact_closed, 1))
             dispatch_async(g_arch_q, ^{ if (!atomic_load(&g_compact_periods)) arch_compact_finish(); });   // on the queue that writes them: after any write under way
-        return;
+        return 0;
     }
     ArchEpoch *ne = ep_new();
-    if (!ne) { MLOG("[RED] pipeline archive: Metal made no compiler for a new flush period: the captures go on into the current one"); return; }
+    if (!ne) { MLOG("[RED] pipeline archive: Metal made no compiler for a new flush period: the captures go on into the current one"); return 0; }
+    if (windowed_timer && !ser_try_begin()) return 1;
     os_unfair_lock_lock(&g_ep_lock);
     ArchEpoch *old = g_ep; any = (!only || old == only) && (atomic_load(&old->n) || atomic_load(&old->active) || atomic_load(&old->crashed));   // again: another flush may just have handed it over
     if (any) {
@@ -10728,13 +10782,19 @@ static void arch_hand_over(ArchEpoch *only, int any_time) {
             old->compacting = 1; atomic_fetch_add(&g_compact_periods, 1);
             if (!atomic_load(&g_warm_running) && !atomic_load(&g_compact_harvests)) atomic_store(&g_compact_closed, 1);
         }
+        dispatch_group_enter(g_arch_pending);
     }
     os_unfair_lock_unlock(&g_ep_lock);
-    if (!any) return;
-    dispatch_group_enter(g_arch_pending);
-    dispatch_group_notify(old->busy, g_arch_q, ^{ @autoreleasepool { arch_write(old); } dispatch_group_leave(g_arch_pending); });
+    if (!any) { if (windowed_timer) ser_end(); return 0; }
+    if (windowed_timer) {
+        @autoreleasepool { arch_write(old, 1); }
+        dispatch_group_leave(g_arch_pending);
+    } else {
+        dispatch_group_notify(old->busy, g_arch_q, ^{ @autoreleasepool { arch_write(old, 0); } dispatch_group_leave(g_arch_pending); });
+    }
+    return 0;
 }
-static void arch_flush_from(ArchEpoch *only) { arch_hand_over(only, 0); }
+static void arch_flush_from(ArchEpoch *only) { arch_hand_over(only, ARCH_FLUSH_NORMAL); }
 static void arch_flush(void) { arch_flush_from(nil); }
 // What the archive has captured and not written, written now, prewarm or not: a quit during a cold start's prewarm otherwise lost the period under way, up to ARCH_PERIOD_MAX
 // bases (Ocarina of Time on an M4: about 2,000 bases, minutes of compiling), built again at the next start. Going to the background (dm_gfx_suspend): wait_ms 0, the write goes
@@ -10747,7 +10807,7 @@ void mtl_arch_save(int wait_ms, int ending) {
     uint64_t t0 = bp_now(); dispatch_time_t until = dispatch_time(DISPATCH_TIME_NOW, (int64_t)wait_ms * NSEC_PER_MSEC);
     long late = wait_ms > 0 && arch_harvest_wait(until);
     int n = atomic_load(&g_arch_new);
-    arch_hand_over(nil, 1);
+    arch_hand_over(nil, ARCH_FLUSH_NOW);
     if (!wait_ms && !ending) return;
     if (n && wait_ms > 0) MLOG("pipeline archive at exit: writing %d pipelines (up to %d ms)", n, wait_ms);
     late = (wait_ms > 0 && dispatch_group_wait(g_arch_pending, until)) || late;
@@ -10758,11 +10818,14 @@ void mtl_arch_save(int wait_ms, int ending) {
 static void arch_at_exit(void) { mtl_warm_stop(); mtl_arch_save(MTL_QUIT_ARCH_MS, 1); }
 // What the harvest queue holds captured, then a flush, then every period handed over is written (not on g_arch_q, which writes them, nor on the harvest queue)
 static void arch_flush_wait(void) { arch_harvest_wait(DISPATCH_TIME_FOREVER); arch_flush(); if (g_arch_pending) dispatch_group_wait(g_arch_pending, DISPATCH_TIME_FOREVER); }
-static void arch_note_new(void) {   // a base was compiled: flush 10 s later (one flush for a burst of them)
+static void arch_note_new(void) {   // a base was compiled: try a flush after one interval (one timer for a burst of them)
     if (!g_arch_q || atomic_exchange(&g_arch_sched, 1)) return;
     // during a prewarm the game plays through, the flush waits for the period's age (arch_warm_flush_due): look again 10 s later while captures wait, new ones or not
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * (int64_t)NSEC_PER_SEC), g_arch_q, ^{ atomic_store(&g_arch_sched, 0); arch_flush();
-        if (atomic_load(&g_warm_running) && atomic_load(&g_warm_bg) && atomic_load(&g_arch_new) > 0) arch_note_new(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ARCH_FLUSH_INTERVAL_S * (int64_t)NSEC_PER_SEC), g_arch_q, ^{
+        atomic_store(&g_arch_sched, 0);
+        int deferred = arch_hand_over(nil, ARCH_FLUSH_TIMER);
+        if ((deferred || (atomic_load(&g_warm_running) && atomic_load(&g_warm_bg))) && atomic_load(&g_arch_new) > 0) arch_note_new();
+    });
 }
 static void arch_compact_finish(void) {   // after every period that may hold recaptured bases is written (arch_write): the old files go once their bases are in the new ones
     if (!g_compact_files || !g_compacted) return;
@@ -16435,19 +16498,35 @@ static void warm_claim(void) {
         }
     }
 }
-// A program's libraries are loaded in the background when the game makes the program (nvnProgramSetShaders, most of them while it loads a scene), and the next submission
+// A Mac development run can build a missing stage here while nvnProgramSetShaders still has the input bytes.
+// A program's libraries are loaded in the background when the game makes the program (most of them while it loads a scene), and the next submission
 // takes them (warm_claim) instead of its first draw loading each on the submit thread: in Donkey Kong Bananza a level's first frames loaded 3 to 7 libraries there, 20-90 ms
 // with the drive idle and up to 4 s with it busy. A draw that comes before its library has loaded loads it itself, as before. DM_NVN_PREFETCH=0 turns it off
 static _Atomic uint64_t g_progpf_loaded;
 static int prefetch_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_PREFETCH"); v = !(e && !strcmp(e, "0")); } return v; }
 void mtl_prog_prefetch(const prog_t *cp) {
     prog_t *p = (prog_t *)cp;
-    if (!g_dev || !prefetch_on()) return;
+    if (!g_dev) return;
+    int prefetch = prefetch_on();
+#if TARGET_OS_OSX
+    live_configure();
+    if (!prefetch && !g_live_shaders) return;
+#else
+    if (!prefetch) return;
+#endif
     shmap_read_once();   // the map only: the prewarm starts on the submit thread (shmap_load)
     for (unsigned i = 0; i < p->nstage; i++) {
         uint8_t md[8]; if (!prog_key(p, i, md)) MDIE("program stage %u has no shader key", i);
         NSString *k = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
-        NSString *stage = g_shmap[k]; int st = stage ? stage_of(stage) : -1;
+        NSString *stage = shader_stage(k);
+#if TARGET_OS_OSX
+        if (!stage && g_live_shaders && !builtin_has(k.UTF8String)) {
+            live_compile(k, &p->sd[i]);
+            stage = shader_stage(k);
+        }
+#endif
+        if (!prefetch) continue;
+        int st = stage ? stage_of(stage) : -1;
         if (st < 0) continue;   // not in the package: a built-in kernel (prog_get)
         NSString *pc = [k stringByAppendingString:@"_b"];
         if (!progpf_first(pc)) continue;
@@ -16498,8 +16577,11 @@ static void bufsnap_after(NvShader *cs, id ce) {
     [(id<MTL4ComputeCommandEncoder>)ce copyFromBuffer:(__bridge id<MTLBuffer>)mb sourceOffset:mo toBuffer:dst destinationOffset:0 size:n];
     g_bw_lo[0] = 0; g_bw_hi[0] = ~0ull; g_bw_n = 1; g_br_n = 0; g_blit_ops = 1;   // recorded as "everything written", as blit() does: the next copy or dispatch is ordered after it (a dispatch ordered by the game's barriers would otherwise overwrite what the copy still reads)
     NSString *key = @(cs->key);
-    [g_commit_blocks addObject:^{ BOOL ok = [[NSData dataWithBytes:dst.contents length:n] writeToFile:path atomically:NO];
-        MLOG("bufsnap after %s: %zu bytes %s %s", key.UTF8String, n, ok ? "saved to" : "could not be written to", path.UTF8String); }];
+    [g_commit_blocks addObject:^{
+        BOOL ok = [[NSData dataWithBytes:dst.contents length:n] writeToFile:path atomically:NO];
+        res_remove(dst);   // only this snapshot owns the buffer; submission completion commits the removal if idle
+        MLOG("bufsnap after %s: %zu bytes %s %s", key.UTF8String, n, ok ? "saved to" : "could not be written to", path.UTF8String);
+    }];
 }
 // Compute dispatches are ordered by the game's own barriers, as NVN orders them (DM_NVN_DISPATCH_BARRIER=full: each after everything before it in its encoder, as before; game, the
 // default; ab alternates the two with the DM_AB phases, for measurement). NVN makes a dispatch's writes visible to later work when the game asks with nvnCommandBufferBarrier; the full
@@ -16891,14 +16973,25 @@ static void copy_b2t(const p_copy_b2t *c, uint32_t size) {
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
     PD("C ser=%llu target %d %ux%ux%u format %#x lv%u sl%u region %d,%d,%d %dx%dx%d from %#llx row %zu image %zu", c->tex->serial, c->tex->d.target, c->tex->d.width, c->tex->d.height, c->tex->d.depth,
        c->tex->d.format, level, layer0, c->r.xoffset, c->r.yoffset, c->r.zoffset, c->r.width, c->r.height, c->r.depth, (unsigned long long)c->src, row, img);
-    void *mb; uint64_t mo;
-    if (!mtl_addr(c->src, img * nz, &mb, &mo)) { RED_ONCE(23, "buffer→texture copy source is in no memory pool"); return; }
+    id<MTLBuffer> sb;
+    uint64_t mo;
+    if (c->flags & DM_COPY_SNAPSHOT) {
+        size_t bytes;
+        if (!cs || __builtin_mul_overflow(img, (size_t)nz, &bytes) || bytes > size - (8 + COPY_STRIDES_OFF + sizeof *cs))
+            MDIE("invalid staged texture copy size");
+        mo = arena_alloc(bytes, &sb);
+        memcpy((uint8_t *)sb.contents + mo, cs + 1, bytes);
+    } else {
+        void *mb;
+        if (!mtl_addr(c->src, img * nz, &mb, &mo)) { RED_ONCE(23, "buffer→texture copy source is in no memory pool"); return; }
+        sb = (__bridge id<MTLBuffer>)mb;
+    }
     g_cut_copy = 1;
     if (is3d && passdump()) { const char *dd = getenv("DM_NVN_CBDUMP"); if (dd) {   // the source bytes of a 3D upload, beside the uniform dumps (F<frame>_c3d_<serial>.bin)
         char p[1024]; snprintf(p, sizeof p, "%s/F%llu_c3d_%llu.bin", dd, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)c->tex->serial);
-        FILE *f = fopen(p, "wb"); if (f) { fwrite((const uint8_t *)((__bridge id<MTLBuffer>)mb).contents + mo, 1, img * nz, f); fclose(f); } } }
+        FILE *f = fopen(p, "wb"); if (f) { fwrite((const uint8_t *)sb.contents + mo, 1, img * nz, f); fclose(f); } } }
     // Into Metal's order (rb_copy_shift): converted on the GPU into a staging area of the frame arena, which the blit copies from
-    id<MTLBuffer> sb = (__bridge id<MTLBuffer>)mb; int shift = rb_copy_shift(c->tex, t);
+    int shift = rb_copy_shift(c->tex, t);
     uint64_t gsrc = sb.gpuAddress + mo; size_t grow = row, gimg = img;   // the guest's bytes, the storage's order (gsb_store_buf)
     if (shift) {
         size_t wb = (size_t)((c->r.width + bw - 1) / bw) * bpb; id<MTLBuffer> ab; size_t ao = arena_alloc(wb * rows * nz, &ab);
@@ -17708,10 +17801,8 @@ int mtl_fps_target(void) { static int env = -2; if (env == -2) { const char *e =
 // Hand a submission to the GPU in segments (DM_NVN_CUT=draw count, 0 = off; default 64): when the game holds back the next frame's submit until this frame's GPU work is done (The Legend of Zelda: Breath of the Wild: the main thread's nvnSyncWait on the fence of the frame just submitted),
 // the GPU sits idle for the milliseconds the host spends translating inside the submit (in the shrine each frame is GPU 13 ms + translation 7 ms back to back). Each time this many draws have accumulated, the command buffer encoded so far is committed between two passes: the GPU runs the earlier passes while the CPU translates the later ones.
 // Cut only when no encoder is open and no pass is deferred / merged / hoisted; commit this batch's uploads first (later draws use them). The fence signal and completion work stay on the last segment only: the queue executes in commit order and every encoder starts with a queue barrier
-// A buffer → texture copy is cut after as well, at the next pass boundary whatever the draw count (g_cut_copy, set by copy_b2t): on the Switch the GPU runs a submission's copies as soon as the
-// submit returns, and a game may reuse the copy's source right after. Catherine: Full Body's resource thread writes the next texture into the staging block 64 ms after the main thread
-// recorded a copy from it (main+0x305e64, frame start) and before that frame's submit had even returned: the host was building pipelines inside the submit for 300 ms, and committed the
-// copy only at its end, so the subtitle band's gradient (BC3, 32x512) came out as the next texture's blocks. Committed at the first pass boundary, the copies run while the host encodes the rest
+// A buffer → texture copy is cut after as well, at the next pass boundary whatever the draw count (g_cut_copy, set by copy_b2t). It can run while the host encodes the rest.
+// The cut starts the already encoded work promptly. Record-time staging handles a source recycled by the CPU before encoding even reaches the copy (hle_nvn.c).
 static int cut_draws(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_CUT"); v = e ? atoi(e) : 64; MLOG("segmented submission: a segment is submitted between passes every %d draws (DM_NVN_CUT, 0 = off)", v); } return v; }
 static uint64_t g_cut_draw0, g_cuts, g_copy_cuts;
 // The count starts with the submission (mtl_sub_begin). It used to start at the submission's first sub_cut, which only a render target change reaches (OP_SET_RT): the draws a
@@ -19587,7 +19678,6 @@ uint64_t mtl_present_ext(uint64_t serial, double period, void *ev, uint64_t ev_v
     if (ev && !g_ext_ev) g_ext_ev = (__bridge id<MTLSharedEvent>)ev;
     return present_enqueue(&t, period, crop, ev ? ev_val : 0, NULL);
 }
-extern _Atomic uint64_t dm_present_ns;   // hle_thread.c (DM_HITCH_DUMP); the NVN, Vulkan and GL presents all come through present_enqueue
 // Present snapshots (DM_PRESENT_SNAP). A game with two swapchain textures (Breath of the Wild) gets one back only when the display link has taken its previous present on a
 // tick, so the next frame's CPU work starts on the tick and the GPU idles from the end of one frame to the first work of the next. macOS reads that idle time as room and holds the GPU
 // at its lowest clock (444 MHz on an M2 Max) even while frames miss the screen, and there 12 ms of GPU work a frame plus the time to the frame's first submission often missed 16.7 ms.

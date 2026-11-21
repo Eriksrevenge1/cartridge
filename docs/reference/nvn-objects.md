@@ -380,6 +380,14 @@ A game may tell NVN objects apart by their bytes, without an NVN call. A host re
 - **Fix:** a registry entry carries `gone` (`cap_treg`), and a gone entry keeps neither its pool nor its storage address and is not read back. `nvn_replay` registers it and then marks it gone (`mtl_reg_tex_gone`), as the live run left it. Captures made before keep working (the byte was padding, 0). `check_t_capture_live` registers a texture on a pool of its own and finalizes that pool, then fills the pool object with such bytes. Without the fix the capture is incomplete.
 - **Found on:** [Pokemon Scarlet](../../dm/games/0100A3D008C5C000/README.md) (texture IDs 1726 to 1786 in the bedroom, each texture with a pool of its own).
 
+### A sparse mapping scan reads a finalized pool object
+
+- **Symptom:** `CRASH sig=10` at `nvn_sparse_pool+0x4` from `mtl_sub_begin` on the submission worker during a level change. The instruction reads `pool->vp`, 24 bytes into the freed pool object.
+- **Cause:** a registered descriptor keeps a copy of `tex_t.pool` after its memory pool is finalized. `nvnMemoryPoolFinalize` already marks the descriptor `gone` under `g_rmu` before tearing the pool down, but `treg_sparse_notes` did not check that state before calling `nvn_sparse_pool` on the copied pointer. A later mapping in another pool sends it through that scan even when no draw reads the old descriptor.
+- **Fix:** the sparse mapping scan removes gone descriptors before reading their pool pointers, under the same registry lock that finalization holds. A registration that revives a removed descriptor restores its sparse tracking even when the descriptor data is identical.
+- **Check:** `make -C dm/gfx/tests GAME=<id> check_t_sparse_pool_cache` with `MTL_DEBUG_LAYER=1`. The fixture finalizes a texture and its pool while leaving the descriptor registered, makes the pool object's page inaccessible, then maps another pool. The next submission must retire the gone entry without reading that page. The fixture faults on the unmodified scan. It also checks that a descriptor revived by an identical registration receives a mapping note and that the GPU reads the newly mapped page.
+- **Found on:** Tony Hawk's Pro Skater 1 + 2 1.0.3 with DLC, title `0100CC00102B4000` ([issue #496](https://github.com/seedds/nxnative/issues/496)), on an M3 MacBook Air, 16 GB, macOS 27.2.1. The original host crashed while loading the tutorial. With only the host swapped for the crash fix, the tutorial loaded and eight levels ran at a steady 30 fps without the crash. The separately reported black surfaces did not recur in those runs and remain unexplained. [PR #3091](https://github.com/seedds/nxnative/pull/3091)
+
 ### A texture read after its memory pool object was freed
 
 - **Symptom:** `CRASH sig=11 … pc=nvn_sparse_protect+0x40`, an address that looks like data, `x8` 8 below it, after a long session; the backtrace `tex_by_id` ← `tex_mtl` ← `pkg_upload`. The pool need not be sparse.
@@ -1025,6 +1033,13 @@ Games read this count as a position in their own command memory and size their h
 - **Fix:** hold the pool-slot mutex across protect's lookup, page-state transitions and final `mprotect`. Pool creation and retirement already hold that mutex. The page-fault and host pre-write paths still take no slot mutex, so they can finish a BUSY transition while protect waits.
 - **Found on:** code review of the shared tracker, from a fork's compatibility commit `587d5206` ported through [PR #686](https://github.com/seedds/nxnative/pull/686). No game is known to hit it: a game normally finalizes a pool only after the GPU is done with it.
 - **Check:** `t_dirty_retire_race` retires the pool between protect's lookup and its first page-state exchange, then reads 16 bytes into the pool with `read()`. Without the fix, retirement completes first and the read fails with `EFAULT`; with it, retirement waits for protection, unregisters the pool and the read returns 16. `t_dirty_race` and `t_dirty_slots` cover page-state publication and shared / reused pool slots.
+
+### CPU staging recycled before a texture upload
+
+- **Symptom:** a scene's first load draws overbright effects or damaged UI textures, particularly while its pipelines are being built.
+- **Cause:** the game returns CPU staging blocks to its resource thread immediately after recording the uploads. The host queues the address and reads it later, when encoding or running the blit. A trace of Catherine's 512×512 BC1 effects texture found the correct bytes at recording and submission, and replacement bytes at encoding about a second later. Starting a new segment after a copy could only help after replay reached the copy.
+- **Fix:** for a verified CPU upload call site, the recording owns the source bytes, along with its strides and texture description. The queued command uses them to fill the Metal staging arena before running the ordered blit. The build ID and return address identify the CPU upload routine because NVN also supports buffer-to-texture copies whose source is written by the GPU.
+- **Found on:** [Catherine: Full Body](../../dm/games/0100BF00112C0000/README.md#rendering).
 
 ## NVN entry points
 
