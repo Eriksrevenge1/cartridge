@@ -86,19 +86,28 @@ def bundle_engine(res):
     # Split as well, so Cartridge asks to rebuild only the games an update reaches (Health.swift): ENGINE_SHAREDHASH, everything but the game profiles (the host, the
     # graphics, the tools, the shared files of dm/games, which reach every game), and ENGINE_PROFILEHASHES, one line per profile folder dm/games/<id> (id, fingerprint), which
     # reach only the games packed from them (pack_app.py records the app's profile and its fingerprint)
+    # Scheme 2 (the app's DMHashScheme) leaves out what never reaches a game: tests (…/tests/…) and Markdown (the game notes, the READMEs), so a change to them asks for no
+    # rebuild. Scheme 1's fingerprints stay beside them (.v1) for the apps packed before, each app compared by the scheme it was packed with
     import hashlib
-    h, shared, per = hashlib.sha256(), hashlib.sha256(), {}
+    h, shared, per, shared1, per1 = hashlib.sha256(), hashlib.sha256(), {}, hashlib.sha256(), {}
+    def reaches(f): return '/tests/' not in f and not f.endswith('.md')
     for f in sorted(f for f in files if f.startswith(('dm/host/', 'dm/gfx/', 'dm/mac/', 'dm/tools/', 'dm/games/', 'dm/third_party/', 'scripts/build_ipa_from_nsp.py'))):
         try: data = (ROOT / f).read_bytes()
         except OSError: data = b''
-        h.update(f.encode() + b'\0' + data)
+        part = f.encode() + b'\0' + data
+        h.update(part)
         m = re.match(r'dm/games/([0-9A-Fa-f]{16})/', f)
-        (per.setdefault(m[1], hashlib.sha256()) if m else shared).update(f.encode() + b'\0' + data)
+        (per1.setdefault(m[1], hashlib.sha256()) if m else shared1).update(part)
+        if reaches(f): (per.setdefault(m[1], hashlib.sha256()) if m else shared).update(part)
+    def table(d): return ''.join(f'{k}\t{v.hexdigest()[:16]}\n' for k, v in sorted(d.items()))
     (CACHE / 'ENGINE_GAMEHASH').write_text(h.hexdigest()[:16] + '\n')
     (CACHE / 'ENGINE_SHAREDHASH').write_text(shared.hexdigest()[:16] + '\n')
-    (CACHE / 'ENGINE_PROFILEHASHES').write_text(''.join(f'{k}\t{v.hexdigest()[:16]}\n' for k, v in sorted(per.items())))
+    (CACHE / 'ENGINE_PROFILEHASHES').write_text(table(per))
+    (CACHE / 'ENGINE_SHAREDHASH.v1').write_text(shared1.hexdigest()[:16] + '\n')
+    (CACHE / 'ENGINE_PROFILEHASHES.v1').write_text(table(per1))
     run(['tar', '-c', '-f', res / 'engine.tar', '-C', ROOT, '-T', lst])
-    run(['tar', '-r', '-f', res / 'engine.tar', '-C', CACHE, 'ENGINE_COMMIT', 'ENGINE_GAMEHASH', 'ENGINE_SHAREDHASH', 'ENGINE_PROFILEHASHES'])   # appended: bsdtar takes a -C after -T before reading the list
+    run(['tar', '-r', '-f', res / 'engine.tar', '-C', CACHE, 'ENGINE_COMMIT', 'ENGINE_GAMEHASH', 'ENGINE_SHAREDHASH', 'ENGINE_PROFILEHASHES',
+         'ENGINE_SHAREDHASH.v1', 'ENGINE_PROFILEHASHES.v1'])   # appended: bsdtar takes a -C after -T before reading the list
     print(f'build_launcher: engine: {len(files)} files, {(res / "engine.tar").stat().st_size / 2**20:.0f} MB')
 
 

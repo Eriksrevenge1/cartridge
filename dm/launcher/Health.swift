@@ -35,14 +35,21 @@ enum Health {
         if Engine.shared.builtIn, let dir = Engine.shared.installedDir {
             func read(_ n: String) -> String? { (try? String(contentsOf: dir.appendingPathComponent(n), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) }
             let c = read("ENGINE_COMMIT") ?? ""
+            // two fingerprint schemes: the current one leaves out tests and notes (.md), which never reach a game; .v1 counts them, as for the apps packed before. An app's
+            // fingerprint matching either scheme's is up to date (each app was packed with one of them; they never coincide)
+            func profileHash(_ table: String?, _ prof: String) -> String? {
+                table?.split(separator: "\n").first { $0.split(separator: "\t").first.map { $0.uppercased() == prof.uppercased() } ?? false }?
+                    .split(separator: "\t").dropFirst().first.map(String.init)
+            }
             if let builtShared = info?["DMEngineSharedHash"] as? String, let nowShared = read("ENGINE_SHAREDHASH") {
-                if builtShared != nowShared {
+                let schemes: [(shared: String, profiles: String?)] = [(nowShared, read("ENGINE_PROFILEHASHES"))] + (read("ENGINE_SHAREDHASH.v1").map { [($0, read("ENGINE_PROFILEHASHES.v1"))] } ?? [])
+                guard let scheme = schemes.first(where: { $0.shared == builtShared }) else {
                     out.append(HealthFinding(level: .info, text: "An update to nxnative reaches every game (\(c)): Rebuild to update."))
-                } else if let prof = info?["DMProfile"] as? String, let builtProf = info?["DMProfileHash"] as? String,
-                          let table = read("ENGINE_PROFILEHASHES") {
-                    let now = table.split(separator: "\n").first { $0.split(separator: "\t").first.map { $0.uppercased() == prof.uppercased() } ?? false }?
-                        .split(separator: "\t").dropFirst().first.map(String.init)
-                    if let now, now != builtProf { out.append(HealthFinding(level: .info, text: "An update changed this game's profile (\(c)): Rebuild to update.")) }
+                    return out
+                }
+                if let prof = info?["DMProfile"] as? String, let builtProf = info?["DMProfileHash"] as? String,
+                   let now = profileHash(scheme.profiles, prof), now != builtProf {
+                    out.append(HealthFinding(level: .info, text: "An update changed this game's profile (\(c)): Rebuild to update."))
                 }
                 return out
             }
