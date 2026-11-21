@@ -159,6 +159,35 @@ static void display_screen(void) {
     if (v) CFRelease(v);
 }
 
+// HDR calibration (docs/launcher.md, HDR calibration): Cartridge keeps the player's peak brightness and paper white per screen (org.nxnative.launcher's hdr.calibration, a
+// dictionary of screen name → { peak, paper } in nits); passed as DM_HDR_CALIBRATION, "<screen>=<peak>/<paper>" joined by ';', for the host to tell a game with HDR of its own
+// what the screen its window is on can show (hle_vi.c). The launch environment or an env file wins
+static void hdr_calibration(void) {
+    if (getenv("DM_HDR_CALIBRATION")) return;
+    CFPropertyListRef v = CFPreferencesCopyAppValue(CFSTR("hdr.calibration"), CFSTR("org.nxnative.launcher"));
+    if (!v) return;
+    if (CFGetTypeID(v) != CFDictionaryGetTypeID()) { CFRelease(v); return; }
+    CFIndex n = CFDictionaryGetCount(v); const void **keys = calloc((size_t)n + 1, sizeof *keys), **vals = calloc((size_t)n + 1, sizeof *vals);
+    char out[4096] = ""; size_t len = 0; int count = 0;
+    if (keys && vals) {
+        CFDictionaryGetKeysAndValues(v, keys, vals);
+        for (CFIndex i = 0; i < n; i++) {
+            char name[256]; int peak = 0, paper = 0;
+            if (CFGetTypeID(keys[i]) != CFStringGetTypeID() || !CFStringGetCString(keys[i], name, sizeof name, kCFStringEncodingUTF8) || CFGetTypeID(vals[i]) != CFDictionaryGetTypeID()) continue;
+            if (strchr(name, ';') || strchr(name, '=')) continue;
+            CFNumberRef pk = CFDictionaryGetValue(vals[i], CFSTR("peak")), pw = CFDictionaryGetValue(vals[i], CFSTR("paper"));
+            if (!pk || !pw || CFGetTypeID(pk) != CFNumberGetTypeID() || CFGetTypeID(pw) != CFNumberGetTypeID()) continue;
+            CFNumberGetValue(pk, kCFNumberIntType, &peak); CFNumberGetValue(pw, kCFNumberIntType, &paper);
+            if (peak <= 0 || paper <= 0) continue;
+            int w = snprintf(out + len, sizeof out - len, "%s%s=%d/%d", len ? ";" : "", name, peak, paper);
+            if (w < 0 || (size_t)w >= sizeof out - len) break;
+            len += (size_t)w; count++;
+        }
+    }
+    free(keys); free(vals); CFRelease(v);
+    if (count) { setenv("DM_HDR_CALIBRATION", out, 1); fprintf(stderr, "launcher: HDR calibration of %d screen(s): %s\n", count, out); }
+}
+
 // Mods (docs/frontends.md, Mods): <sup>/mods.txt names the mods that are on, one folder of <sup>/mods per line, the first winning where two have the same file. Of each one:
 //   - romfs/ (or the folder itself when it has no romfs/, exefs/ or aoc/) becomes a DM_ROMFS_OVERLAY folder
 //   - exefs/ becomes a DM_EXEFS_PATCHES folder: its IPS and pchtxt patches are applied at load (hle_exefs.c)
@@ -281,6 +310,7 @@ int main(int argc, char **argv) {
     if (shown == 2) saved_choices();
     cloud_saves_folder();
     display_screen();
+    hdr_calibration();
     microphone_at_launch();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_TEMP", temp, 0);
     // The player's controls (dm/host/controls.h): the file every game reads, then this game's own, whose lines win

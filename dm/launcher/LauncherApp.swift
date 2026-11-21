@@ -59,6 +59,7 @@ struct LauncherApp: App {
                 FoldersView().environmentObject(library).tabItem { Label("Library", systemImage: "books.vertical") }
                 BuildSettingsView().environmentObject(builder).tabItem { Label("Building", systemImage: "hammer") }
                 BatterySettingsView().tabItem { Label("Battery", systemImage: "battery.75percent") }
+                HDRSettingsView().tabItem { Label("Display", systemImage: "sun.max") }
                 UpdatesSettingsView().tabItem { Label("Updates", systemImage: "arrow.down.circle") }
             }
             .frame(width: 560, height: 400)
