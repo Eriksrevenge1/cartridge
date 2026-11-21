@@ -91,6 +91,7 @@ final class CheatsModel: ObservableObject {
         cheats[i].on = on; writeEnabled()
     }
     func setAll(_ on: Bool) { for i in cheats.indices { cheats[i].on = on }; writeEnabled() }
+    func writeEnabledPublic() { writeEnabled() }
     private func writeEnabled() {
         guard let f = enabledFile else { return }
         let text = cheats.filter(\.on).map { $0.key + "\n" }.joined()
@@ -113,8 +114,8 @@ final class CheatsModel: ObservableObject {
             try fm.copyItem(at: src, to: dest)
             let stem = src.deletingPathExtension().lastPathComponent.uppercased()
             message = stem.count == 16 && stem.allSatisfy(\.isHexDigit) && stem != b
-                ? "Installed. The file was named for build \(stem), not this one (\(b)): its addresses may not fit this version."
-                : "Installed for build \(b)."
+                ? "Added. The file was made for another version of the game (\(stem)), so its cheats may not work."
+                : "Added."
         } catch { message = "Could not install: \(error.localizedDescription)" }
         reload()
     }
@@ -130,49 +131,64 @@ struct CheatsView: View {
         m.cheats.filter { $0.section == s && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }
     }
 
+    @State private var choosing = false
+    @State private var advanced = false
+
     var body: some View {
         Form {
             Section {
-                LabeledContent("Build ID", value: m.buildID ?? "unknown")
-                if let f = m.file { LabeledContent("Cheat file", value: f.path.replacingOccurrences(of: m.game.support.path + "/", with: "")) }
-                else { Text("No cheat file for this version of the game. Add an Atmosphère cheat file named \(m.buildID ?? "<build ID>").txt.").foregroundStyle(.secondary) }
-                if !m.others.isEmpty { Text("Files for other versions: \(m.others.joined(separator: ", ")). Their addresses do not fit this version.").font(.footnote).foregroundStyle(.secondary) }
                 HStack {
-                    Button("Add Cheat File…") { pick() }
-                    Button("Open Cheats Folder") {
-                        try? FileManager.default.createDirectory(at: m.game.cheatsFolder, withIntermediateDirectories: true)
-                        NSWorkspace.shared.open(m.game.cheatsFolder)
-                    }
-                    Button("Refresh") { m.reload() }
+                    Button("Find Cheats…") { choosing = true }.buttonStyle(.borderedProminent)
+                    if let t = m.message { Text(t).foregroundStyle(.secondary) }
                 }
-                if let s = m.message { Text(s).font(.footnote) }
-                Text("Changes take effect at the game's next start, or with Cheats › Reload cheats (⌘R) in the game. Typed values and run-once cheats are set in the game's Cheats window.")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
-            FindCheatsSection(m: m)
-            if !m.cheats.isEmpty {
-                Section {
-                    Toggle("Cheats on", isOn: Binding(get: { !m.masterOff }, set: { m.setMaster(off: !$0) }))
+            Section("Your cheats") {
+                if m.cheats.isEmpty {
+                    Text("You have no cheats for this game yet.").foregroundStyle(.secondary)
+                } else {
+                    Toggle("Cheats", isOn: Binding(get: { !m.masterOff }, set: { m.setMaster(off: !$0) }))
+                    Text("Takes effect the next time the game starts (or press ⌘R in the game).").font(.callout).foregroundStyle(.secondary)
                     HStack {
-                        TextField("Search", text: $search).textFieldStyle(.roundedBorder)
+                        if m.cheats.count > 12 { TextField("Search", text: $search).textFieldStyle(.roundedBorder) }
+                        Spacer()
                         Button("All On") { m.setAll(true) }
                         Button("All Off") { m.setAll(false) }
                     }
                 }
-                ForEach(sections, id: \.self) { s in
-                    let rows = shown(s)
-                    if !rows.isEmpty {
-                        Section(s.isEmpty ? "Cheats" : s) {
-                            ForEach(rows) { c in
-                                Toggle(c.name, isOn: Binding(get: { c.on }, set: { m.set(c, on: $0) }))
-                            }
+            }
+            ForEach(sections, id: \.self) { s in
+                let rows = shown(s)
+                if !rows.isEmpty {
+                    Section(s.isEmpty ? "" : s) {
+                        ForEach(rows) { c in
+                            Toggle(c.name, isOn: Binding(get: { c.on }, set: { m.set(c, on: $0) }))
                         }
-                        .disabled(m.masterOff)
                     }
+                    .disabled(m.masterOff)
                 }
+            }
+            Section {
+                DisclosureGroup("Advanced", isExpanded: $advanced) {
+                    LabeledContent("Build ID", value: m.buildID ?? "unknown")
+                    if let f = m.file { LabeledContent("Cheat file", value: f.path.replacingOccurrences(of: m.game.support.path + "/", with: "")) }
+                    else { Text("No cheat file yet. An Atmosphère cheat file for this version is named \(m.buildID ?? "<build ID>").txt.").font(.footnote).foregroundStyle(.secondary) }
+                    if !m.others.isEmpty { Text("Files for other versions: \(m.others.joined(separator: ", ")). Their addresses do not fit this version.").font(.footnote).foregroundStyle(.secondary) }
+                    HStack {
+                        Button("Add Cheat File…") { pick() }
+                        Button("Open Cheats Folder") {
+                            try? FileManager.default.createDirectory(at: m.game.cheatsFolder, withIntermediateDirectories: true)
+                            NSWorkspace.shared.open(m.game.cheatsFolder)
+                        }
+                        Button("Refresh") { m.reload() }
+                    }
+                    Text("Typed values and run-once cheats are set in the game's Cheats window.").font(.footnote).foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text(CheatsModel.dbCredit).font(.footnote).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $choosing) { ChooseCheatsSheet(m: m) }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             for p in providers { _ = p.loadObject(ofClass: URL.self) { u, _ in if let u, u.pathExtension.lowercased() == "txt" { DispatchQueue.main.async { m.install(u) } } } }
             return true

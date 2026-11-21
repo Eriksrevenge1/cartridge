@@ -1,9 +1,9 @@
 // Find Cheats (a game's Cheats page; docs/launcher.md, Find Cheats): the community database switch-cheats-db (github.com/HamletDuFromage/switch-cheats-db, one JSON file
 // per title ID: build ID → { "[Name]": Atmosphère text }, and "attribution"), fetched when the player asks, never bundled or mirrored. A Switch 2 Edition (title ID 04…) has
 // its own entry rarely: its Switch 1 game's (01…, the last digit 0) is tried too, and labelled so. Cheats for the game's own build are added to its <build ID>.txt, the
-// player's own entries kept, all new ones off. Cheats for other builds are carried to this one with scripts/cheat_anchor.py (import on the source build's ExeFS main,
+// player's own entries kept. Cheats for other builds are carried to this one with scripts/cheat_anchor.py (import on the source build's ExeFS main,
 // compile on this build's) when both mains are in the player's games folder (the NSP script's extractions: <title ID>_build/extract/v<n>/ExeFS/main, …_survey/…): nothing
-// is downloaded but the cheat text; carried cheats are named "… (ported, untested)"
+// is downloaded but the cheat text; carried cheats are named "… (converted, may not work)"
 import Foundation
 import SwiftUI
 
@@ -25,7 +25,7 @@ enum FinderState { case idle, searching, none(String), found(CheatSearch), faile
 
 extension CheatsModel {
     static let dbURL = "https://raw.githubusercontent.com/HamletDuFromage/switch-cheats-db/master/cheats/"
-    static let dbCredit = "From the switch-cheats-db community database (HamletDuFromage), by their authors."
+    static let dbCredit = "Cheats from the switch-cheats-db community database, by their authors."
 
     /// The title IDs to look up: the game's, then for a Switch 2 Edition (04…) its Switch 1 game's (01…, last digit 0)
     var lookupIDs: [(String, Bool)] {
@@ -39,9 +39,9 @@ extension CheatsModel {
         for (tid, s1) in lookupIDs {
             guard let url = URL(string: Self.dbURL + tid + ".json") else { continue }
             var r = URLRequest(url: url, timeoutInterval: 20); r.cachePolicy = .reloadIgnoringLocalCacheData
-            guard let (data, resp) = try? await URLSession.shared.data(for: r), let code = (resp as? HTTPURLResponse)?.statusCode else { finder = .failed("Could not reach the cheat database."); return }
+            guard let (data, resp) = try? await URLSession.shared.data(for: r), let code = (resp as? HTTPURLResponse)?.statusCode else { finder = .failed("Couldn't reach the cheat database. Check your internet connection and try again."); return }
             if code == 404 { continue }
-            guard code == 200, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { finder = .failed("The cheat database answered in a way Cartridge does not understand."); return }
+            guard code == 200, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { finder = .failed("The cheat database sent something Cartridge doesn't understand. Try again later."); return }
             var sets: [CheatSet] = []
             for (k, v) in obj where k.count == 16 && k.allSatisfy(\.isHexDigit) {
                 guard let d = v as? [String: String] else { continue }
@@ -58,12 +58,12 @@ extension CheatsModel {
 
     /// Cheats added to this build's file: the player's entries stay, a cheat whose name is already there is left out, all new ones are off
     @discardableResult func addCheats(_ cheats: [(name: String, text: String)], from: String) -> Int {
-        guard let b = buildID else { message = "This app has no build ID: build it again."; return 0 }
+        guard let b = buildID else { message = "This game needs to be built again before cheats can be added."; return 0 }
         let fm = FileManager.default, dest = file ?? game.cheatsFolder.appendingPathComponent("\(b).txt")
         let had = (try? String(contentsOf: dest, encoding: .utf8)) ?? ""
         let names = Set(Self.parse(had).map(\.name))
         let new = cheats.filter { !names.contains($0.name) }
-        guard !new.isEmpty else { message = "These cheats are already installed."; return 0 }
+        guard !new.isEmpty else { message = "No new cheats found."; return 0 }
         var text = had
         if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
         text += "\n" + new.map { c in c.text.hasSuffix("\n") ? c.text : c.text + "\n" }.joined(separator: "\n")
@@ -73,15 +73,19 @@ extension CheatsModel {
             let credit = dest.deletingPathExtension().appendingPathExtension("source.txt")
             let line = "\(new.count) cheat(s) from \(from). \(Self.dbCredit)\n"
             if let h = try? FileHandle(forWritingTo: credit) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() } else { try? line.write(to: credit, atomically: true, encoding: .utf8) }
-        } catch { message = "Could not install: \(error.localizedDescription)"; return 0 }
+        } catch { message = "Couldn't add the cheats: \(error.localizedDescription)"; return 0 }
         reload()
         return new.count
     }
 
-    func installMine(_ s: CheatSearch) {
-        guard let set = s.mine else { return }
-        let n = addCheats(set.cheats, from: "switch-cheats-db")
-        if n > 0 { message = "Installed \(n) cheat\(n == 1 ? "" : "s"). They start off: turn on the ones you want." }
+    /// The cheats ticked in Choose cheats: written into this version's cheat file (the player's entries untouched, names already there skipped) and switched on
+    func addChosen(_ chosen: [(name: String, text: String)], from: String) {
+        let names = Set(cheats.map(\.name))
+        let new = chosen.filter { !names.contains($0.name) }
+        guard addCheats(new, from: from) > 0 else { return }
+        for i in cheats.indices where new.contains(where: { $0.name == cheats[i].name }) { cheats[i].on = true }
+        writeEnabledPublic()
+        message = "Added \(new.count) cheat\(new.count == 1 ? "" : "s")."
     }
 
     /// An ExeFS main of the given build in the player's games folder (or beside this game's app), from the NSP script's extractions
@@ -104,15 +108,14 @@ extension CheatsModel {
         return nil
     }
 
-    /// Carries another build's cheats to this build (cheat_anchor.py import, then compile): the ones that resolve are added as "… (ported, untested)"
-    func port(_ set: CheatSet) {
-        guard let b = buildID else { message = "This app has no build ID: build it again."; return }
-        guard let src = mainNSO(build: set.build) else {
-            message = "Cheats exist for another version of this game (\(set.build)), but carrying them over needs that version's files, which aren't in your games folder."; return
-        }
-        guard let dst = mainNSO(build: b) else { message = "This version's files aren't in your games folder any more: build the game again, then try."; return }
-        guard let py = Engine.shared.python?.path, let dir = Engine.shared.installedDir else { message = "Cartridge's engine is not ready yet."; return }
-        message = "Carrying \(set.cheats.count) cheats over…"
+    /// Carries another build's cheats to this build (cheat_anchor.py import, then compile): the ones that resolve are added as "… (converted, may not work)"
+    /// Converts another version's cheats for this one (cheat_anchor.py import on that version's main, compile on this one's) and hands back the ones that converted,
+    /// named "… (converted, may not work)", and how many did not; or a plain reason
+    func convert(_ set: CheatSet, done: @escaping (_ cheats: [(name: String, text: String)], _ failed: Int, _ problem: String?) -> Void) {
+        guard let b = buildID else { done([], 0, "This game needs to be built again before cheats can be added."); return }
+        guard let src = mainNSO(build: set.build) else { done([], 0, "These cheats can't be converted: the other version's game files aren't in your games folder."); return }
+        guard let dst = mainNSO(build: b) else { done([], 0, "Your version's game files aren't in your games folder any more: build the game again, then try."); return }
+        guard let py = Engine.shared.python?.path, let dir = Engine.shared.installedDir else { done([], 0, "Cartridge is still getting ready: try again in a minute."); return }
         let script = dir.appendingPathComponent("scripts/cheat_anchor.py").path
         DispatchQueue.global(qos: .userInitiated).async {
             let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("cartridge-cheats-\(UUID().uuidString)")
@@ -122,15 +125,11 @@ extension CheatsModel {
             try? set.cheats.map { $0.text.hasSuffix("\n") ? $0.text : $0.text + "\n" }.joined(separator: "\n").write(to: txt, atomically: true, encoding: .utf8)
             let a = shell(py, [script, "import", txt.path, "--nso", src.path, "-o", toml.path])
             let c = a.0 == 0 || a.0 == 2 ? shell(py, [script, "compile", toml.path, "--nso", dst.path, "-o", tmp.appendingPathComponent("out").path]) : a
-            let out = tmp.appendingPathComponent("out/\(b).txt")
-            let text = (try? String(contentsOf: out, encoding: .utf8)) ?? ""
-            let ported = Self.parse(text).isEmpty ? [] : Self.split(text).map { (name: $0.name + " (ported, untested)", text: $0.text.replacingOccurrences(of: "[\($0.name)]", with: "[\($0.name) (ported, untested)]")) }
+            let text = (try? String(contentsOf: tmp.appendingPathComponent("out/\(b).txt"), encoding: .utf8)) ?? ""
+            let got = Self.split(text).map { (name: $0.name + " (converted, may not work)", text: $0.text.replacingOccurrences(of: "[\($0.name)]", with: "[\($0.name) (converted, may not work)]")) }
             DispatchQueue.main.async {
-                guard c.0 == 0 || c.0 == 2 else { self.message = "These cheats could not be carried over to your version."; return }
-                let n = ported.isEmpty ? 0 : self.addCheats(ported, from: "switch-cheats-db, carried over from version \(set.build)")
-                let skipped = set.cheats.count - ported.count
-                self.message = n == 0 && ported.isEmpty ? "None of these cheats could be carried over to your version."
-                    : "Carried \(ported.count) of \(set.cheats.count) cheats over (\(skipped) could not be). They start off and are untested: try them one at a time."
+                if c.0 != 0 && c.0 != 2 { done([], set.cheats.count, "These cheats couldn't be converted for your version."); return }
+                done(got, max(set.cheats.count - got.count, 0), got.isEmpty ? "None of these cheats could be converted for your version." : nil)
             }
         }
     }
@@ -151,32 +150,89 @@ extension CheatsModel {
     }
 }
 
-struct FindCheatsSection: View {
+/// Choose cheats: the database's cheats for this version, each with a checkbox (unticked; the player's own shown ticked and disabled, "(added)"), Select All / None, a search
+/// field for a long list, and Cancel / Add N. With only other versions in the database, More options converts them and lists what converted in the same checkboxes
+struct ChooseCheatsSheet: View {
     @ObservedObject var m: CheatsModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var items: [(name: String, text: String)] = []
+    @State private var ticked: Set<String> = []
+    @State private var search = ""
+    @State private var from = "switch-cheats-db"
+    @State private var note: String?
+    @State private var converting = false
+    @State private var moreOpen = false
+    private var have: Set<String> { Set(m.cheats.map(\.name)) }
+    private var shown: [(name: String, text: String)] { items.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) } }
+    private var choosable: [String] { items.map(\.name).filter { !have.contains($0) } }
+
     var body: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Choose cheats").font(.title2)
             switch m.finder {
-            case .idle: Button("Find Cheats…") { Task { await m.findCheats() } }
-            case .searching: HStack { ProgressView().controlSize(.small); Text("Looking for cheats…") }
-            case .none(let s), .failed(let s): Text(s); Button("Search Again") { Task { await m.findCheats() } }
+            case .idle, .searching:
+                Spacer(); HStack { Spacer(); ProgressView().controlSize(.small); Text("Looking for cheats…"); Spacer() }; Spacer()
+            case .none(let t), .failed(let t):
+                Spacer(); Text(t).frame(maxWidth: .infinity); Spacer()
             case .found(let s):
-                if let mine = s.mine {
-                    Text("\(mine.cheats.count) cheat\(mine.cheats.count == 1 ? "" : "s") for your version")
-                    Text(mine.cheats.prefix(8).map(\.name).joined(separator: " · ") + (mine.cheats.count > 8 ? " …" : "")).font(.footnote).foregroundStyle(.secondary)
-                    Button("Install (they start off)") { m.installMine(s) }
-                } else {
-                    Text(s.switch1 ? "No cheats for this edition; the database has some for the Switch 1 version, written for other builds:" : "No cheats for your version; the database has some for other versions:")
-                }
-                ForEach(s.others) { o in
-                    HStack {
-                        Text("\(o.cheats.count) cheat\(o.cheats.count == 1 ? "" : "s") for version \(o.build)\(s.switch1 ? " (Switch 1)" : "")").font(.callout)
-                        Spacer()
-                        Button("Carry Over") { m.port(o) }
+                if items.isEmpty {
+                    Text(s.mine == nil ? "No cheats for your version of this game." : "No cheats found for this game.")
+                    if s.mine == nil && !s.others.isEmpty {
+                        DisclosureGroup("More options", isExpanded: $moreOpen) {
+                            ForEach(s.others) { o in
+                                HStack {
+                                    Text("Try cheats made for another version (may not all work)")
+                                    Text("\(o.cheats.count)\(s.switch1 ? ", Switch 1 version" : "")").foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Try") {
+                                        converting = true; note = nil
+                                        m.convert(o) { got, failed, problem in
+                                            converting = false
+                                            if let problem { note = problem; return }
+                                            items = got; from = "switch-cheats-db, converted from another version"
+                                            note = failed > 0 ? "\(failed) couldn't be converted." : nil
+                                        }
+                                    }.disabled(converting)
+                                }
+                            }
+                            if converting { HStack { ProgressView().controlSize(.small); Text("Converting…") } }
+                        }
                     }
+                    if let note { Text(note).foregroundStyle(.secondary) }
+                    Spacer()
+                } else {
+                    HStack {
+                        if items.count > 12 { TextField("Search", text: $search).textFieldStyle(.roundedBorder) }
+                        Spacer()
+                        Button("Select All") { ticked = Set(choosable) }
+                        Button("Select None") { ticked = [] }
+                    }
+                    if let note { Text(note).foregroundStyle(.secondary) }
+                    List(shown, id: \.name) { c in
+                        let added = have.contains(c.name)
+                        Toggle(isOn: Binding(get: { added || ticked.contains(c.name) },
+                                             set: { if $0 { ticked.insert(c.name) } else { ticked.remove(c.name) } })) {
+                            Text(added ? "\(c.name) (added)" : c.name)
+                        }
+                        .toggleStyle(.checkbox).disabled(added)
+                    }
+                    .frame(minHeight: 260)
                 }
-                if !s.others.isEmpty { Text("Carrying over works only when that version's files are in your games folder, and not for every cheat.").font(.footnote).foregroundStyle(.secondary) }
-                Text(CheatsModel.dbCredit + (s.credit.isEmpty ? "" : " (\(s.credit))")).font(.footnote).foregroundStyle(.secondary)
             }
-        } header: { Text("Find Cheats") }
+            Text(CheatsModel.dbCredit).font(.footnote).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Add \(ticked.count)") {
+                    m.addChosen(items.filter { ticked.contains($0.name) }, from: from); dismiss()
+                }.keyboardShortcut(.defaultAction).disabled(ticked.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 520, height: 520)
+        .task {
+            await m.findCheats()
+            if case .found(let s) = m.finder, let mine = s.mine { items = mine.cheats }
+        }
     }
 }
