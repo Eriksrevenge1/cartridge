@@ -61,7 +61,15 @@ final class Builder: ObservableObject {
         keys = store.string(forKey: "build.keys") ?? ""
         repo = store.string(forKey: "build.repo") ?? (info["DMRepo"] as? String ?? "")
         python = store.string(forKey: "build.python") ?? (info["DMPython"] as? String ?? "/usr/bin/python3")
+        // the Setup Assistant writes these settings itself: picked up here as they change, so Settings › Building and the Build window show the new ones at once
+        watch = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            for (k, cur, set) in [("build.keys", self.keys, { (v: String) in self.keys = v }), ("build.repo", self.repo, { self.repo = $0 }), ("build.python", self.python, { self.python = $0 })] {
+                if let v = self.store.string(forKey: k), v != cur { set(v) }
+            }
+        }
     }
+    private var watch: NSObjectProtocol?
 
     var script: URL { URL(fileURLWithPath: repo).appendingPathComponent("scripts/build_ipa_from_nsp.py") }
     var ready: String? {   // why a build cannot start, or nil
