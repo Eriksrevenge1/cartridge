@@ -30,6 +30,19 @@ def dynsyms(img):
 _INPUT_STREAM_OPEN = '_ZN2nn5audio15OpenInputStreamEPNS0_15InputStreamTypeEPvmRKNS0_15AudioDeviceNameERKNS0_12StreamFormatEi'
 
 
+# A Switch 2 game with HDR of its own asks the display for its HDR status (hle_vi.c; docs/reference/rendering.md, A Switch 2 game's own HDR on a screen with HDR on)
+_HDR_STATUS = '_ZN2nn2vi21QueryDisplayHdrStatusEPbPNS0_15HdrOutputFormatEPtPKNS0_7DisplayE'
+
+
+def native_hdr(modules):
+    for module in modules:
+        if not module.name.endswith('.patched.bin'): continue
+        try: symbols = dynsyms(module.read_bytes())
+        except (AssertionError, KeyError, IndexError, ValueError, struct.error): continue
+        if any(name == _HDR_STATUS and not defined for name, defined, _ in symbols): return True
+    return False
+
+
 def audio_input_capable(modules):
     for module in modules:
         if not module.name.endswith('.patched.bin'): continue

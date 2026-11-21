@@ -67,6 +67,7 @@ def build(gid, patched, control, other_programs=()):
     keys = fixups_keys(Path(patched) / 'main.fixups.tsv')
     mac_mic = platform == 'mac' and nso_syms.audio_input_capable(
         p for folder in (patched, *other_programs) for p in Path(folder).glob('*.patched.bin'))
+    hdr_own = nso_syms.native_hdr(p for folder in (patched, *other_programs) for p in Path(folder).glob('*.patched.bin'))
     have = nacp.languages(control)
     langs = [(c, n) for c, n in nacp.LANGUAGES if not have or c in have]   # no list (a dump or a NUP has no control data, none of its packages may): any language may be the game's, as DM_LANG and the NSP script's check take it
 
@@ -77,6 +78,7 @@ def build(gid, patched, control, other_programs=()):
     def shown(cond, n):
         if cond == 'always': return True
         if cond == 'mac-mic': return mac_mic
+        if cond == 'native-hdr': return hdr_own
         if cond == 'languages>1': return len(langs) > 1
         if cond.startswith('fixups:'): return cond[7:] in keys
         if cond.startswith('gfxapi:'): return os.environ.get('GFXAPI', '') == cond[7:]

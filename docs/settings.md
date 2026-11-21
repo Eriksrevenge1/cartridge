@@ -64,6 +64,10 @@ Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its worl
 
 On by default. Switch games draw a standard (SDR) picture. On a screen with HDR turned on (an HDR monitor in its HDR mode, a MacBook Pro's or Pro Display XDR's screen, or an iPhone's or iPad's HDR screen), the app lifts the picture's bright parts above normal white into the screen's HDR range: the sky, light, fire and magic glow, while the rest stays as the game drew it. The screen's own HDR brightness sets how far, at most 2.5 times normal white (`DM_HDR_PEAK` in `env.txt` changes the limit). On a screen without HDR nothing changes. Off keeps the standard picture everywhere. An iPhone's or iPad's Low Power Mode keeps the standard picture.
 
+### HDR style
+
+Shown only for games with HDR of their own (they ask the display whether it is in HDR: Donkey Kong Bananza, Nintendo Switch 2 Welcome Tour, The Legend of Zelda: Ocarina of Time), under **HDR**. **Game's own**, the default, tells the game the screen is in HDR, so it draws its own HDR picture, graded by its makers. **Auto-HDR** tells it the screen is SDR, so it draws its standard picture and the app lifts its bright parts, as for other games; some prefer its punchier highlights. The game reads it when it starts. In `env.txt`: `DM_HDR_NATIVE=0` for Auto-HDR.
+
 ### Game's upscaler
 
 Shown only for games that upscale their own picture with a network of their own before the app sees it: agl's NDSR network, in Donkey Kong Bananza and Splatoon Raiders. **Game's own**, the default, keeps the game's upscaler. **MetalFX** replaces it with Apple's MetalFX spatial scaler: the same input and output sizes, at a fraction of the GPU time, but Apple's scaler's picture rather than the game's.
