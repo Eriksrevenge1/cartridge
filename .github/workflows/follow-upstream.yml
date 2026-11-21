@@ -1,6 +1,7 @@
 # Cartridge follows upstream nxnative (docs/launcher.md, Following upstream). Every three hours, on the fork's launcher branch: upstream's main is merged in; the merge
 # is tested (the tool, settings, docs and chain tests, the host's build, the CPU-only display-link and pacing tests) and Cartridge built; then the merge is pushed and
-# published as a release (scripts/release_cartridge.py), which every Cartridge is offered. One channel: upstream publishes no stable versions, only main.
+# published as a release (scripts/release_cartridge.py), which every Cartridge is offered. With nothing to merge, a newest commit of the branch that has no release
+# (a merge resolved by hand, Cartridge's own work) is tested and published the same way. One channel: upstream publishes no stable versions, only main.
 # Nothing is pushed or published when the merge conflicts or a test fails: the run fails (GitHub emails the repository's owner) and an issue names the files or the
 # step. Conflicts only in generated files (the symptom index, the chain's version header) are resolved by generating them again.
 # Pushing a merge that changes upstream's workflow files needs a token with the Workflows permission: the repository secret UPSTREAM_TOKEN (a fine-grained token for
@@ -50,7 +51,15 @@ jobs:
           git remote add upstream "https://github.com/$UPSTREAM"
           git fetch -q upstream main
           up=$(git rev-parse upstream/main)
-          if git merge-base --is-ancestor "$up" HEAD; then echo "Upstream has nothing new." | tee -a "$GITHUB_STEP_SUMMARY"; echo "new=0" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if git merge-base --is-ancestor "$up" HEAD; then
+            # nothing to merge; the branch's newest commit still gets its release (a merge resolved by hand, Cartridge's own work)
+            if gh release view "cartridge-$(git rev-list --count HEAD)" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              echo "Upstream has nothing new, and $BRANCH is released." | tee -a "$GITHUB_STEP_SUMMARY"; echo "new=0" >> "$GITHUB_OUTPUT"
+            else
+              echo "Upstream has nothing new; $BRANCH's newest commit has no release yet." | tee -a "$GITHUB_STEP_SUMMARY"; echo "new=1" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
           n=$(git rev-list --count "HEAD..$up")
           msg="merge upstream nxnative main ($n commits) into $BRANCH"
           if ! git merge --no-ff --no-edit -m "$msg" upstream/main; then
