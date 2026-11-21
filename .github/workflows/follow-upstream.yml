@@ -2,8 +2,10 @@
 # is tested (the tool, settings, docs and chain tests, the host's build, the CPU-only display-link and pacing tests) and Cartridge built; then the merge is pushed and
 # published as a release (scripts/release_cartridge.py), which every Cartridge is offered. With nothing to merge, a newest commit of the branch that has no release
 # (a merge resolved by hand, Cartridge's own work) is tested and published the same way. One channel: upstream publishes no stable versions, only main.
-# Nothing is pushed or published when the merge conflicts or a test fails: the run fails (GitHub emails the repository's owner) and an issue names the files or the
-# step. Conflicts only in generated files (the symptom index, the chain's version header) are resolved by generating them again.
+# Conflicts in generated files (the symptom index, the chain's version header) are resolved by generating them again, Markdown by dm/tools/md_merge.py
+# (.gitattributes), the rest by Claude (anthropics/claude-code-action, with the secret CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`), which also fixes a merge
+# whose tests fail. Its work is pushed only when the tests pass again. When they do not, or there is no Claude token, nothing is pushed or published: the run
+# fails (GitHub emails the repository's owner) and an issue (label upstream-merge) says why: the only case that needs a person.
 # Pushing a merge that changes upstream's workflow files needs a token with the Workflows permission: the repository secret UPSTREAM_TOKEN (a fine-grained token for
 # this repository with Contents, Workflows and Issues: read and write). Without it, such a merge stops at the push and says so.
 name: follow-upstream
@@ -16,6 +18,7 @@ on:
 permissions:
   contents: write   # the merge and the release
   issues: write     # the report when it needs a hand
+  id-token: write   # claude-code-action's sign-in
 
 concurrency:
   group: follow-upstream
@@ -62,22 +65,20 @@ jobs:
           fi
           n=$(git rev-list --count "HEAD..$up")
           msg="merge upstream nxnative main ($n commits) into $BRANCH"
+          git config merge.mdkeep.driver 'python3 dm/tools/md_merge.py %O %A %B'   # Markdown: upstream's text plus the fork's new lines (.gitattributes)
+          echo "msg=$msg" >> "$GITHUB_OUTPUT"
           if ! git merge --no-ff --no-edit -m "$msg" upstream/main; then
             conflicts=$(git diff --name-only --diff-filter=U)
+            gen=$(echo "$conflicts" | grep -x -e docs/agents/symptoms.md -e dm/gfx/nvn/dmsh_chain.h || true)
+            if [ -n "$gen" ]; then git checkout --theirs -- $gen; git add -- $gen; fi   # generated files: made again below
             others=$(echo "$conflicts" | grep -v -x -e docs/agents/symptoms.md -e dm/gfx/nvn/dmsh_chain.h || true)
             if [ -n "$others" ]; then
-              git merge --abort
               { echo "conflicts<<EOF"; echo "$others"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-              echo "::error::upstream's $n new commits conflict with $BRANCH in: $(echo $others)"; exit 1
+              echo "::warning::upstream's $n new commits conflict with $BRANCH in: $(echo $others); Claude resolves them"
+              echo "new=1" >> "$GITHUB_OUTPUT"; exit 0
             fi
-            git checkout --theirs -- $conflicts   # generated files: made again below
-            git add -- $conflicts
             git commit -q --no-edit
           fi
-          # the generated files, from the merged sources
-          python3 dm/gfx/tools/dmsh_chain.py --header > /dev/null
-          python3 dm/tools/docs_symptoms.py > /dev/null
-          if ! git diff --quiet; then git commit -q -a --amend --no-edit; fi
           echo "new=1" >> "$GITHUB_OUTPUT"
           echo "Merged $n upstream commits (upstream main $(git rev-parse --short "$up"))." | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -87,17 +88,54 @@ jobs:
       - name: Install the Python packages the tools import
         if: steps.merge.outputs.new == '1'
         run: python -m pip install lz4 "capstone>=5,<6" fonttools
-      - name: Test
-        id: test
+      - name: Claude resolves the conflicts
+        id: resolve
+        if: steps.merge.outputs.conflicts != ''
+        uses: anthropics/claude-code-action@5342e104274fd0a0f168e0fe9eb2cbb1a781f447 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.UPSTREAM_TOKEN || github.token }}
+          claude_args: --max-turns 150 --allowedTools Bash,Read,Edit,Write,Glob,Grep
+          prompt: |
+            You are merging upstream nxnative (github.com/${{ env.UPSTREAM }}, main) into Cartridge's fork, branch ${{ env.BRANCH }}. The merge is in progress in
+            this checkout and stopped on conflicts in these files:
+            ${{ steps.merge.outputs.conflicts }}
+            Read AGENTS.md and docs/launcher.md first. Resolve every conflict so both sides keep working: upstream's change and the fork's (Cartridge's launcher,
+            HDR, the 120 Hz display, mods, the screen choice and the rest of the fork's work). Usually that means keeping both; where they truly collide, keep
+            upstream's structure and carry the fork's behaviour onto it. Never drop either side's feature to make it compile. Then `git add` the files and
+            finish the merge with `git commit --no-edit` (do not push). Afterwards run `bash .github/follow-upstream-tests.sh`; if anything fails, fix the
+            cause in the code (not the test) and commit again, until it passes. If you cannot make it pass, stop and write why to claude-report.md
+            (not committed).
+      - name: Generated files, from the merged sources
         if: steps.merge.outputs.new == '1'
         run: |
           set -euo pipefail
-          for t in test_docs test_settings test_launcher_settings test_nsp_chain; do echo "::group::$t"; python3 dm/tools/tests/$t.py; echo "::endgroup::"; done
-          make -C dm/host GAME="$GAME" -j3
-          cd dm/gfx/tests
-          tests="t_link_ticks t_link_latch t_link_drain t_present_rescue t_pace t_fstep"   # the display link and pacing, where Cartridge's host changes are
-          make GAME="$GAME" -j3 $tests
-          for t in $tests; do echo "::group::$t"; ./$t; echo "::endgroup::"; done
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then echo "::error::conflicts are left"; exit 1; fi
+          if git rev-parse -q --verify MERGE_HEAD > /dev/null; then git commit -q --no-edit; fi
+          python3 dm/gfx/tools/dmsh_chain.py --header > /dev/null
+          python3 dm/tools/docs_symptoms.py > /dev/null
+          if ! git diff --quiet; then git commit -q -a -m "docs, chain: generated files from the merged sources"; fi
+      - name: Test
+        id: test
+        if: steps.merge.outputs.new == '1'
+        continue-on-error: true
+        run: bash .github/follow-upstream-tests.sh 2>&1 | tee test.log
+      - name: Claude fixes the failing tests
+        if: steps.test.outcome == 'failure'
+        uses: anthropics/claude-code-action@5342e104274fd0a0f168e0fe9eb2cbb1a781f447 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.UPSTREAM_TOKEN || github.token }}
+          claude_args: --max-turns 150 --allowedTools Bash,Read,Edit,Write,Glob,Grep
+          prompt: |
+            Cartridge's fork (branch ${{ env.BRANCH }}) has just merged upstream nxnative (github.com/${{ env.UPSTREAM }}, main), and its tests fail:
+            `bash .github/follow-upstream-tests.sh` (the last lines of its output are in test.log). Read AGENTS.md and docs/launcher.md first. Find the cause,
+            usually where upstream's change and the fork's meet, and fix it in the code so both keep working (never by dropping a feature, skipping or weakening
+            a test). Commit the fix (do not push) and run the tests again, until they pass. If you cannot make them pass, stop and write why to
+            claude-report.md (not committed).
+      - name: Test again
+        if: steps.test.outcome == 'failure'
+        run: bash .github/follow-upstream-tests.sh
       - name: Push the merge and publish it
         id: publish
         if: steps.merge.outputs.new == '1'
@@ -127,7 +165,8 @@ jobs:
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          if [ -n "$CONFLICTS" ]; then why="Upstream's new commits conflict with \`$BRANCH\` in:"$'\n'"$(echo "$CONFLICTS" | sed 's/^/- `/; s/$/`/')"; else why="A step failed after the merge (tests, the build, the push or the release)."; fi
+          if [ -n "$CONFLICTS" ]; then why="Upstream's new commits conflict with \`$BRANCH\` in:"$'\n'"$(echo "$CONFLICTS" | sed 's/^/- `/; s/$/`/')"$'\n\n'"Claude could not resolve them with the tests passing."; else why="A step failed after the merge (tests Claude could not fix, the build, the push or the release)."; fi
+          if [ -f claude-report.md ]; then why="$why"$'\n\n'"Claude's note:"$'\n\n'"$(cat claude-report.md)"; fi
           body="$why"$'\n\n'"Nothing was pushed or published. Run: $RUN"$'\n\n'"Merge by hand (\`git fetch upstream && git merge upstream/main\` on \`$BRANCH\`), then push; the next run continues from there."
           n=$(gh issue list --state open --label upstream-merge --json number --jq '.[0].number // ""' 2> /dev/null || true)
           gh label create upstream-merge --color d93f0b --description "follow-upstream needs a hand" 2> /dev/null || true

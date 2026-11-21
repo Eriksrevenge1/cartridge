@@ -1,0 +1,4 @@
+# Cartridge's fork (docs/launcher.md, Following upstream): where upstream's docs and the fork's change the same place, a merge keeps upstream's text and adds the
+# fork's own new lines (dm/tools/md_merge.py, set up as the merge driver mdkeep: git config merge.mdkeep.driver 'python3 dm/tools/md_merge.py %O %A %B'), so
+# follow-upstream.yml merges them on its own; test_docs.py then checks the links and anchors. Without the driver configured, git merges these as usual
+*.md merge=mdkeep
