@@ -22,6 +22,7 @@ struct LauncherApp: App {
                 .frame(minWidth: 860, minHeight: 560)
                 .modifier(SetupOnFirstStart())
                 .task { Engine.shared.ensure() }   // a new Cartridge's engine unpacked on the games folder's drive
+                .task { Updates.shared.startCheck() }   // once a day (Settings › Updates)
                 .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder; appearance.apply() }
                 .onChange(of: appearance) { appearance.apply() }
         }
@@ -58,6 +59,7 @@ struct LauncherApp: App {
                 FoldersView().environmentObject(library).tabItem { Label("Library", systemImage: "books.vertical") }
                 BuildSettingsView().environmentObject(builder).tabItem { Label("Building", systemImage: "hammer") }
                 BatterySettingsView().tabItem { Label("Battery", systemImage: "battery.75percent") }
+                UpdatesSettingsView().tabItem { Label("Updates", systemImage: "arrow.down.circle") }
             }
             .frame(width: 560, height: 400)
         }
@@ -601,10 +603,14 @@ struct FirstStartNote: View {
     }
 }
 
-/// Cartridge › Setup Assistant…
+/// Cartridge › Setup Assistant…, Check for Updates…
 struct SetupCommand: View {
     @Environment(\.openWindow) private var openWindow
-    var body: some View { Button("Setup Assistant…") { openWindow(id: "setup") } }
+    @Environment(\.openSettings) private var openSettings
+    var body: some View {
+        Button("Setup Assistant…") { openWindow(id: "setup") }
+        Button("Check for Updates…") { Updates.shared.check(); openSettings() }
+    }
 }
 /// At the first start, the setup assistant opens by itself when something a build needs is missing (until its Done is pressed once)
 struct SetupOnFirstStart: ViewModifier {

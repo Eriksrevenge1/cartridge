@@ -514,6 +514,8 @@ def pack(a):
     info['DMModuleFiles'] = [p.name for p in mods]
     commit = source_commit()
     if commit: info['DMCommit'] = commit
+    gh = HERE.parent.parent / 'ENGINE_GAMEHASH'   # the engine Cartridge carries: the fingerprint of what reaches the app (scripts/build_launcher.py), for Cartridge's rebuild check
+    if gh.is_file(): info['DMEngineHash'] = gh.read_text().strip()
     if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]   # the library chain the app carries (a Vulkan or GL game's vk / gl has none)
     (c / 'Info.plist').write_bytes(plistlib.dumps(info))
     (c / 'PkgInfo').write_text('APPL????')

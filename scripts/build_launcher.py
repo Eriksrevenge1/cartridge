@@ -81,8 +81,17 @@ def bundle_engine(res):
     head = run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD']).strip()
     dirty = run(['git', '-C', ROOT, 'status', '--porcelain', '--untracked-files=no']).strip()
     (CACHE / 'ENGINE_COMMIT').write_text(head + ('+dirty' if dirty else '') + '\n')
+    # what reaches a game's app, as one fingerprint (dm/mac/pack_app.py records it as DMEngineHash; Health.swift asks for a rebuild only when it differs, not when
+    # Cartridge itself changed): the content of the host, graphics, Mac app, tools, scripts, the game profiles and the settings list
+    import hashlib
+    h = hashlib.sha256()
+    for f in sorted(f for f in files if f.startswith(('dm/host/', 'dm/gfx/', 'dm/mac/', 'dm/tools/', 'dm/games/', 'dm/third_party/', 'scripts/build_ipa_from_nsp.py'))):
+        h.update(f.encode() + b'\0')
+        try: h.update((ROOT / f).read_bytes())
+        except OSError: pass
+    (CACHE / 'ENGINE_GAMEHASH').write_text(h.hexdigest()[:16] + '\n')
     run(['tar', '-c', '-f', res / 'engine.tar', '-C', ROOT, '-T', lst])
-    run(['tar', '-r', '-f', res / 'engine.tar', '-C', CACHE, 'ENGINE_COMMIT'])   # appended: bsdtar takes a -C after -T before reading the list
+    run(['tar', '-r', '-f', res / 'engine.tar', '-C', CACHE, 'ENGINE_COMMIT', 'ENGINE_GAMEHASH'])   # appended: bsdtar takes a -C after -T before reading the list
     print(f'build_launcher: engine: {len(files)} files, {(res / "engine.tar").stat().st_size / 2**20:.0f} MB')
 
 
@@ -114,6 +123,19 @@ def bundle_python(res, t):
     print(f'build_launcher: python {PY_VERSION} with {", ".join(m.split(">")[0] for m in PY_MODULES)}')
 
 
+def build_number():   # the count of commits: grows with every commit, so versions compare as numbers (Updates.swift)
+    r = subprocess.run(['git', '-C', ROOT, 'rev-list', '--count', 'HEAD'], capture_output=True, text=True)
+    return int(r.stdout.strip() or 0)
+
+
+def update_repo():   # owner/name of the fork whose releases Cartridge updates from (the git remote named fork, else CARTRIDGE_UPDATE_REPO); None: no updates
+    import os
+    if os.environ.get('CARTRIDGE_UPDATE_REPO'): return os.environ['CARTRIDGE_UPDATE_REPO']
+    r = subprocess.run(['git', '-C', ROOT, 'remote', 'get-url', 'fork'], capture_output=True, text=True)
+    m = re.search(r'github\.com[:/]([^/]+/[^/.]+)', r.stdout)
+    return m.group(1) if m else None
+
+
 def min_os():   # the Mac host's minimum macOS (dm/mac/min_os.mk)
     m = re.search(r'^MACOS_MIN\s*:=\s*(\S+)', (ROOT / 'dm/mac/min_os.mk').read_text(), re.M)
     return m.group(1) if m else '26.6'
@@ -123,6 +145,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--out', type=Path, default=Path('/Applications'), help='folder to put the app in (default /Applications, which the Apps list shows)')
     ap.add_argument('--open', action='store_true', help='start the app when it is built')
+    ap.add_argument('--keep-others', action='store_true', help='leave other copies of Cartridge alone (a release build to another folder: the installed one stays)')
     ap.add_argument('--no-engine', action='store_true', help='leave the engine and its Python out (a quick build while working on Cartridge itself; it then builds games from DMRepo)')
     ap.add_argument('--sign', metavar='IDENTITY', help='sign with this Apple Development identity (security find-identity -p codesigning; a free Apple ID makes one in Xcode › Settings › '
                     'Accounts) and include the Last Played widget, which macOS runs only from an app signed with a developer team; default: ad hoc, without the widget')
@@ -149,7 +172,8 @@ def main():
         with open(stage / 'Contents/Info.plist', 'wb') as f:
             plistlib.dump({
                 'CFBundleName': NAME, 'CFBundleDisplayName': NAME, 'CFBundleIdentifier': BUNDLE_ID, 'CFBundleExecutable': EXE, 'CFBundleIconFile': 'AppIcon',
-                'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.0', 'CFBundleVersion': '1', 'CFBundleInfoDictionaryVersion': '6.0',
+                'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': f'1.{build_number()}', 'CFBundleVersion': str(build_number()), 'CFBundleInfoDictionaryVersion': '6.0',
+                **({'DMUpdateRepo': update_repo()} if update_repo() else {}),   # where Cartridge looks for updates (dm/launcher/Updates.swift): the fork's GitHub releases
                 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
                 'LSApplicationCategoryType': 'public.app-category.games', 'DMCommit': commit,
                 'CFBundleURLTypes': [{'CFBundleURLName': BUNDLE_ID, 'CFBundleURLSchemes': ['cartridge']}],   # cartridge:// links (dm/launcher/Router.swift)
@@ -161,12 +185,13 @@ def main():
             shutil.rmtree(app)
         stage.rename(app)
     # the same app (its bundle ID and settings) under an earlier name, or in the other Applications folder: to the Trash, so the Dock and the Apps list show one
-    for o in [d / f'{n}.app' for d in {a.out, Path('/Applications'), Path.home() / 'Applications'} for n in [NAME] + OLD_NAMES]:
+    for o in ([] if a.keep_others else [d / f'{n}.app' for d in {a.out, Path('/Applications'), Path.home() / 'Applications'} for n in [NAME] + OLD_NAMES]):
         if o != app and o.exists():
             subprocess.run(['osascript', '-e', f'tell application "Finder" to delete POSIX file "{o}"'], capture_output=True)
             if o.exists(): shutil.rmtree(o)
             print(f'build_launcher: moved {o} to the Trash (an earlier copy)')
     print(f'build_launcher: {app}')
+    if a.keep_others: return   # a release build elsewhere: not registered, so Launch Services keeps opening the installed Cartridge
     lsregister = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
     subprocess.run([lsregister, '-f', app], capture_output=True)   # known to Launch Services (and so the Apps list) at once, not at the next scan
     if a.open:

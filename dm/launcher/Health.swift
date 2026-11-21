@@ -27,6 +27,17 @@ enum Health {
             out.append(HealthFinding(level: .warn, text: String(format: "Only %.1f GB free on your home drive, where the game keeps its save and caches: free some space before playing.", Double(free) / 1e9)))
         }
         let info = NSDictionary(contentsOf: g.contents.appendingPathComponent("Info.plist"))
+        // built with the engine Cartridge carries: an app from another engine version asks for a rebuild (an update brought a newer one)
+        // compared by the fingerprint of what reaches a game (ENGINE_GAMEHASH, the app's DMEngineHash), not the commit: a Cartridge-only change asks for nothing.
+        // An app without one (built before, or from your own checkout) is not judged
+        if Engine.shared.builtIn, let dir = Engine.shared.installedDir {
+            let now = (try? String(contentsOf: dir.appendingPathComponent("ENGINE_GAMEHASH"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let now, let built = info?["DMEngineHash"] as? String, built != now {
+                let c = (try? String(contentsOf: dir.appendingPathComponent("ENGINE_COMMIT"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                out.append(HealthFinding(level: .info, text: "Built with an older nxnative than Cartridge's (\(c)): Rebuild to update."))
+            }
+            return out
+        }
         let repo = UserDefaults.standard.string(forKey: "build.repo") ?? (Bundle.main.infoDictionary?["DMRepo"] as? String ?? "")
         guard !repo.isEmpty, fm.fileExists(atPath: repo + "/.git") else { return out }
         if let chain = info?["DMChain"] as? String, let h = try? String(contentsOfFile: repo + "/dm/gfx/nvn/dmsh_chain.h", encoding: .utf8),
