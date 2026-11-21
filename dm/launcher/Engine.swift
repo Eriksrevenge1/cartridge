@@ -1,7 +1,9 @@
 // The engine Cartridge carries (scripts/build_launcher.py: Resources/engine.tar, the repository's files without docs; Resources/python.tar, a standalone Python with the
 // NSP script's modules), unpacked once per version into <games folder's drive>/…/.cartridge-engine/<version>/ (beside the games folder: builds write into it, a compiled
 // host per game profile, and the home drive is kept free), then used by every build. Settings › Building can point builds at your own nxnative checkout and Python
-// instead (for working on nxnative itself). Older versions stay beside it (Updates installs new ones the same way); Xcode is still needed (the Setup Assistant)
+// instead (for working on nxnative itself). Older versions stay beside it (Updates installs new ones the same way); Xcode is still needed (the Setup Assistant).
+// Settings › Building can go back to the previous version kept there (engine.usePrevious), for an update whose engine builds a game worse: builds and the games'
+// health checks then use it until it is turned off
 import Foundation
 
 final class Engine: ObservableObject {
@@ -23,10 +25,28 @@ final class Engine: ObservableObject {
         if let p = store.string(forKey: "engine.parent") { return URL(fileURLWithPath: p) }
         return GamesFolder.root?.appendingPathComponent(".cartridge-engine")
     }
-    var dir: URL? { guard let parent, let version else { return nil }; return parent.appendingPathComponent(version) }
+    /// The version this Cartridge carries, unpacked
+    var currentDir: URL? { guard let parent, let version else { return nil }; return parent.appendingPathComponent(version) }
+    /// The newest other version kept (prune keeps one), finished unpacking
+    var previous: String? {
+        guard let parent else { return nil }
+        let fm = FileManager.default
+        let all = (try? fm.contentsOfDirectory(at: parent, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        return all.filter { $0.lastPathComponent != version && $0.pathExtension != "partial" && fm.fileExists(atPath: $0.appendingPathComponent(".installed").path) }
+            .max { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) < ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }?
+            .lastPathComponent
+    }
+    /// Builds use the previous version instead of this one (Settings › Building), while it is kept
+    var usePrevious: Bool {
+        get { store.bool(forKey: "engine.usePrevious") && previous != nil }
+        set { store.set(newValue, forKey: "engine.usePrevious"); installedDir = isInstalled ? dir : nil; objectWillChange.send() }
+    }
+    /// The version builds use
+    var dir: URL? { if usePrevious, let parent, let p = previous { return parent.appendingPathComponent(p) }; return currentDir }
+    var inUse: String? { dir?.lastPathComponent }
     var python: URL? { dir?.appendingPathComponent("python/bin/python3") }
-    private var marker: URL? { dir?.appendingPathComponent(".installed") }
-    var isInstalled: Bool { marker.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
+    var isInstalled: Bool { dir.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent(".installed").path) } ?? false }
+    private var currentInstalled: Bool { currentDir.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent(".installed").path) } ?? false }
 
     init() { if isInstalled { installedDir = dir } }
 
@@ -40,8 +60,8 @@ final class Engine: ObservableObject {
     }
     /// Unpacked if it is not yet (in the background); a finished one is used by the next build
     func ensure() {
-        guard builtIn, !isInstalled, status.isEmpty else { if isInstalled { installedDir = dir }; return }
-        guard let dir, let parent else { status = "Choose a games folder (Setup Assistant): the engine is unpacked on its drive."; return }
+        guard builtIn, !currentInstalled, status.isEmpty else { if isInstalled { installedDir = dir }; return }
+        guard let dir = currentDir, let parent else { status = "Choose a games folder (Setup Assistant): the engine is unpacked on its drive."; return }
         if let free = Builder.freeSpace(at: parent), free < 3_000_000_000 {
             status = String(format: "Only %.1f GB free on the games folder's drive: the engine needs about 2 GB.", Double(free) / 1e9); return
         }
@@ -57,7 +77,7 @@ final class Engine: ObservableObject {
             if ok { Engine.prune(parent, keep: dir) }
             DispatchQueue.main.async {
                 self.status = ok ? "" : "The engine could not be unpacked into \(dir.path)."
-                if ok { self.installedDir = dir }
+                if ok { self.installedDir = self.dir }
             }
         }
     }

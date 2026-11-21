@@ -604,6 +604,11 @@ struct BuildSettingsView: View {
                 Toggle("Build with the engine Cartridge carries (\(Engine.shared.version ?? ""))", isOn: Binding(get: { engine.builtIn }, set: { engine.builtIn = $0; engine.ensure() }))
                 Text(engine.builtIn ? (engine.installedDir?.path ?? engine.status) : "Off: builds use your own nxnative checkout and Python, below (for working on nxnative itself).")
                     .font(.footnote).foregroundStyle(.secondary)
+                if engine.builtIn, let prev = engine.previous {
+                    Toggle("Use the previous engine (\(prev))", isOn: Binding(get: { engine.usePrevious }, set: { engine.usePrevious = $0 }))
+                    Text("For an update whose engine builds a game worse: rebuild the game after turning this on. Turn it off to go back to the engine this Cartridge carries.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             if !engine.builtIn {
                 TextField("nxnative repository", text: $builder.repo)

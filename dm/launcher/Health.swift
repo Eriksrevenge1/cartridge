@@ -34,7 +34,7 @@ enum Health {
             let now = (try? String(contentsOf: dir.appendingPathComponent("ENGINE_GAMEHASH"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let now, let built = info?["DMEngineHash"] as? String, built != now {
                 let c = (try? String(contentsOf: dir.appendingPathComponent("ENGINE_COMMIT"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                out.append(HealthFinding(level: .info, text: "Built with an older nxnative than Cartridge's (\(c)): Rebuild to update."))
+                out.append(HealthFinding(level: .info, text: "Built with another nxnative than the one Cartridge builds with (\(c)): Rebuild to update."))
             }
             return out
         }

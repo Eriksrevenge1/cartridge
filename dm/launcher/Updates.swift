@@ -1,8 +1,10 @@
 // Updates (Settings › Updates; Cartridge › Check for Updates…): Cartridge's new versions from the GitHub releases of the fork it was built from (Info.plist DMUpdateRepo,
 // scripts/build_launcher.py; scripts/release_cartridge.py publishes them). A release is tagged cartridge-<build> (the commit count, Info.plist CFBundleVersion) with the app as
-// Cartridge.zip; Stable takes releases, Experimental pre-releases too. The repository is public, so nothing signs in. Checked at start once a day (or never), and on Check Now.
+// Cartridge.zip; one channel: every release (and the pre-releases published before there was one) counts. The repository is public, so nothing signs in. Checked at start once a day (or never), and on Check Now.
 // An update downloads to the games folder's drive (the home drive is kept free), replaces Cartridge (the old one goes to the Trash) and starts the new one, which unpacks its
-// engine beside the previous (Engine.swift keeps one to go back to). Games built with an older engine then say so on their page (Health.swift): Rebuild to update
+// engine beside the previous (Engine.swift keeps one to go back to). Games built with an older engine then say so on their page (Health.swift): Rebuild to update.
+// While Cartridge stays open it checks again every few hours, and asks only about a version it has not asked about yet. Releases come from the fork's follow-upstream
+// workflow: every upstream change that merges and passes its tests becomes a release. Upstream publishes no stable versions (only main), so there is no Stable channel
 import AppKit
 import SwiftUI
 
@@ -12,23 +14,34 @@ struct CartridgeRelease: Equatable {
 
 final class Updates: ObservableObject {
     static let shared = Updates()
-    enum State: Equatable { case idle, checking, upToDate, available(CartridgeRelease), downloading(Double), failed(String) }
+    enum State: Equatable {
+        case idle, checking, upToDate, available(CartridgeRelease), downloading(Double), failed(String)
+        var isDownloading: Bool { if case .downloading = self { return true }; return false }
+    }
     @Published var state: State = .idle
     private let store = UserDefaults.standard
     let repo: String? = Bundle.main.infoDictionary?["DMUpdateRepo"] as? String
     let build: Int = Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0") ?? 0
 
-    var experimental: Bool { get { store.bool(forKey: "updates.experimental") } set { store.set(newValue, forKey: "updates.experimental"); objectWillChange.send() } }
     var automatic: Bool { get { store.object(forKey: "updates.auto") as? Bool ?? true } set { store.set(newValue, forKey: "updates.auto"); objectWillChange.send() } }
 
-    /// At start: a check once a day, when automatic
+    private var timer: Timer?
+    static let every: TimeInterval = 6 * 3600
+    /// At start: a check once a day, when automatic; then every few hours while Cartridge is open
     func startCheck() {
-        guard automatic, repo != nil else { return }
+        guard repo != nil else { return }
+        if timer == nil {
+            timer = Timer.scheduledTimer(withTimeInterval: Self.every, repeats: true) { [weak self] _ in
+                guard let self, self.automatic, self.state != .checking, !(self.state.isDownloading) else { return }
+                self.check(ask: true, onlyNew: true)
+            }
+        }
+        guard automatic else { return }
         if let last = store.object(forKey: "updates.last") as? Date, Date().timeIntervalSince(last) < 86_400 { return }
         check(ask: true)
     }
-    /// ask: a check of its own (at start) asks whether to update when it finds one
-    func check(ask: Bool = false) {
+    /// ask: a check of its own (at start, or the periodic one) asks whether to update when it finds one; onlyNew: not about a version it asked about already
+    func check(ask: Bool = false, onlyNew: Bool = false) {
         guard let repo, let url = URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30") else { state = .failed("This Cartridge was built without an update source."); return }
         state = .checking
         Task { @MainActor in
@@ -42,11 +55,12 @@ final class Updates: ObservableObject {
                       let a = assets.first(where: { ($0["name"] as? String) == "Cartridge.zip" }), let u = (a["browser_download_url"] as? String).flatMap(URL.init(string:)) else { return nil }
                 return CartridgeRelease(tag: tag, build: b, prerelease: o["prerelease"] as? Bool ?? false, notes: o["body"] as? String ?? "", asset: u, size: (a["size"] as? NSNumber)?.int64Value ?? 0)
             }
-            let best = found.filter { $0.build > build && (experimental || !$0.prerelease) }.max { $0.build < $1.build }
+            let best = found.filter { $0.build > build }.max { $0.build < $1.build }
             state = best.map { .available($0) } ?? .upToDate
-            if ask, let best {
+            if ask, let best, !(onlyNew && store.integer(forKey: "updates.asked") >= best.build) {
+                store.set(best.build, forKey: "updates.asked")
                 let a = NSAlert(); a.messageText = "Cartridge 1.\(best.build) is available"
-                a.informativeText = (best.prerelease ? "An experimental version. " : "") + String(best.notes.prefix(600))
+                a.informativeText = String(best.notes.prefix(600))
                 a.addButton(withTitle: "Update and Restart"); a.addButton(withTitle: "Later")
                 if a.runModal() == .alertFirstButtonReturn { install(best) }
             }
@@ -92,17 +106,14 @@ struct UpdatesSettingsView: View {
             if u.repo == nil {
                 Text("This Cartridge was built without an update source (no fork remote).").foregroundStyle(.secondary)
             } else {
-                Picker("Channel", selection: Binding(get: { u.experimental }, set: { u.experimental = $0 })) {
-                    Text("Stable").tag(false); Text("Experimental (newer, less tested)").tag(true)
-                }
-                Toggle("Check for updates once a day", isOn: Binding(get: { u.automatic }, set: { u.automatic = $0 }))
+                Toggle("Check for updates automatically (at start once a day, and every few hours while open)", isOn: Binding(get: { u.automatic }, set: { u.automatic = $0 }))
                 HStack {
                     Button("Check Now") { u.check() }.disabled(u.state == .checking)
                     switch u.state {
                     case .idle: EmptyView()
                     case .checking: ProgressView().controlSize(.small)
                     case .upToDate: Text("Cartridge is up to date.").foregroundStyle(.secondary)
-                    case .available(let r): Text(verbatim: "Cartridge 1.\(r.build)\(r.prerelease ? " (experimental)" : "") is available.")   // verbatim: no digit grouping ("1.1,844")
+                    case .available(let r): Text(verbatim: "Cartridge 1.\(r.build) is available.")   // verbatim: no digit grouping ("1.1,844")
                     case .downloading: ProgressView().controlSize(.small); Text("Downloading…").foregroundStyle(.secondary)
                     case .failed(let m): Text(m).foregroundStyle(.red)
                     }

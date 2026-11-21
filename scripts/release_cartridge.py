@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Publish Cartridge (with the engine it carries) as a release of your fork, which every Cartridge built from it updates from (dm/launcher/Updates.swift).
 
-    python3 scripts/release_cartridge.py                  # a Stable release
-    python3 scripts/release_cartridge.py --experimental   # a pre-release: only the Experimental channel takes it
+    python3 scripts/release_cartridge.py                  # a release (one channel: every Cartridge takes the newest)
     python3 scripts/release_cartridge.py --dry-run        # build and zip, publish nothing
 
 It needs the GitHub CLI signed in (gh auth login) with the git remote named "fork" pointing at your fork, and a clean checkout: the release is the commit
@@ -24,7 +23,6 @@ def run(cmd, **kw):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--experimental', action='store_true', help='a pre-release, for the Experimental channel only')
     ap.add_argument('--dry-run', action='store_true', help='build and zip; publish nothing')
     ap.add_argument('--notes', help='release notes (default: the commit titles since the last release)')
     a = ap.parse_args()
@@ -58,8 +56,7 @@ def main():
                 if r.returncode == 0: since = r.stdout.strip(); break
             log = run(['git', '-C', ROOT, 'log', '--format=- %s', f'{since}..HEAD' if since else '-15'])
             notes = 'Changes:\n' + log
-        cmd = ['gh', 'release', 'create', tag, zip_, '--repo', repo, '--target', sha, '--title', f'Cartridge 1.{build}' + (' (experimental)' if a.experimental else ''), '--notes', notes]
-        if a.experimental: cmd.append('--prerelease')
+        cmd = ['gh', 'release', 'create', tag, zip_, '--repo', repo, '--target', sha, '--title', f'Cartridge 1.{build}', '--notes', notes]
         print(run(cmd))
 
 
