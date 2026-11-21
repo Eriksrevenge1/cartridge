@@ -19,12 +19,50 @@ enum GameBanana {
     static func q(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s }
 }
 
+
+/// What Browse Mods does not offer (the owner's legal review, after Nintendo v. Yuzu): mods that replace the game's code (whole code modules), unlock paid content, are
+/// console system or piracy tools (signature patches, Atmosphère or firmware files, keys), or give an advantage in online play; and, unless the player turns it on, mods
+/// rated for mature content. Decided from the name, category and description where they say so plainly (conservative: only clear cases), and again from the unpacked files
+/// at install (GameBanana's API does not list an archive's contents). Code patches (IPS, pchtxt) stay allowed
+enum ModRules {
+    static func has(_ t: String, _ pattern: String) -> Bool { t.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
+    /// Why a mod is not offered, from what GameBanana says about it; nil when it is
+    static func refused(name: String, category: String, description: String = "") -> String? {
+        let t = "\(name)\n\(category)\n\(description)"
+        if has(t, #"\b(sig(nature)?\s*patch(es)?|sigpatch(es)?|es\s*patch(es)?|prod\.keys|title\.keys|\b(prod|title)\s*keys\b|firmware\s*(files?|dumps?|updates?|downloads?|packages?|\d)|atmosph[eè]re|hekate|\bcfw\b|custom\s*firmware|tinfoil|homebrew\s*(loader|menu|launcher)|nsp\s*install)"#) { return "console system or piracy tool" }
+        if has(t, #"(unlock(s|er|ed|ing)?\b[^\n]{0,30}\b(dlc|paid|premium|season\s*pass|expansion\s*pass)|\b(dlc|paid\s*content|season\s*pass)\b[^\n]{0,20}\bunlock|free\s*dlc|all\s*dlc\s*unlock|dlc\s*unlocker)"#) { return "unlocks paid content" }
+        if has(t, #"\b(online|pvp|ranked|multiplayer|competitive)\b"#) && has(t, #"\b(cheat|hack|aimbot|wallhack|esp\b|god\s*mode|exploit|speed\s*hack)"#) { return "gives an advantage in online play" }
+        return nil
+    }
+    /// Why an unpacked mod is refused, from its files; nil when it can be installed
+    static func refused(files root: URL) -> String? {
+        let fm = FileManager.default
+        guard let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey]) else { return nil }
+        var ncas = 0
+        for case let u as URL in e {
+            let rel = u.path.dropFirst(root.path.count).lowercased(), n = u.lastPathComponent
+            if rel.contains("/atmosphere/kips") || rel.contains("/atmosphere/exefs_patches") || rel.hasSuffix(".kip") || n.lowercased() == "prod.keys" || n.lowercased() == "title.keys"
+                || rel.contains("/bootloader/") || rel.contains("/hekate") { return "console system or piracy files" }
+            if rel.hasSuffix(".nca") { ncas += 1; if ncas >= 3 { return "console system or piracy files" } }
+            if has(String(rel), #"dlc[\s_-]*unlock"#) { return "unlocks paid content" }
+            if (try? u.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true, ModsModel.isModule(n),
+               u.deletingLastPathComponent().lastPathComponent.lowercased() == "exefs" || ["subsdk", "rtld"].contains(where: { n.lowercased().hasPrefix($0) }) {
+                return "replaces the game's code"
+            }
+        }
+        return nil
+    }
+}
+
 struct GBGame: Identifiable, Hashable { let id: Int; let name: String }
 struct GBMod: Identifiable, Hashable {
     let id: Int, name: String, author: String, likes: Int, views: Int, updated: Date?, thumb: URL?, page: URL?
+    let category: String, mature: Bool   // GameBanana's root category; rated for mature content by GameBanana (content ratings, or hidden by default there)
     init?(_ o: [String: Any]) {
         guard let id = o["_idRow"] as? Int, let name = o["_sName"] as? String else { return nil }
         self.id = id; self.name = name
+        category = (o["_aRootCategory"] as? [String: Any])?["_sName"] as? String ?? ""
+        mature = (o["_bHasContentRatings"] as? Bool ?? false) || (o["_sInitialVisibility"] as? String) == "hide"
         author = (o["_aSubmitter"] as? [String: Any])?["_sName"] as? String ?? "?"
         likes = o["_nLikeCount"] as? Int ?? 0; views = o["_nViewCount"] as? Int ?? 0
         updated = ((o["_tsDateUpdated"] ?? o["_tsDateModified"] ?? o["_tsDateAdded"]) as? Double).map { Date(timeIntervalSince1970: $0) }
@@ -34,7 +72,10 @@ struct GBMod: Identifiable, Hashable {
     }
 }
 struct GBFile: Identifiable, Hashable { let id: Int, name: String, size: Int64, version: String, about: String, download: URL? }
-struct GBDetail { let mod: GBMod, description: String, authors: [String], files: [GBFile] }
+struct GBDetail {
+    let mod: GBMod, description: String, authors: [String], files: [GBFile]
+    var refused: String? { ModRules.refused(name: mod.name, category: mod.category, description: description) }
+}
 
 @MainActor final class ModBrowserModel: ObservableObject {
     let mods: ModsModel
@@ -51,7 +92,10 @@ struct GBDetail { let mod: GBMod, description: String, authors: [String], files:
     @Published var busy = false
     @Published var detail: GBDetail?
     @Published var installing: Int?
+    @Published var showMature = UserDefaults.standard.bool(forKey: "mods.showMature") { didSet { UserDefaults.standard.set(showMature, forKey: "mods.showMature") } }
     private var page = 1
+    /// The mods shown: none that Browse Mods does not offer, and the mature-rated ones only when the player turns them on
+    var shown: [GBMod] { list.filter { ModRules.refused(name: $0.name, category: $0.category) == nil && (showMature || !$0.mature) } }
     init(mods: ModsModel) { self.mods = mods }
     var isEdition: Bool { mods.switch1TitleID != nil }
     private var key: String { "mods.gamebanana.\(game.titleID)" }
@@ -110,7 +154,7 @@ struct GBDetail { let mod: GBMod, description: String, authors: [String], files:
 
     /// Download one file of the mod (from GameBanana, when pressed), unpack it on the games drive, install it off with its credit, delete the download
     func install(_ f: GBFile, of d: GBDetail) async {
-        guard let url = f.download else { return }
+        guard let url = f.download, d.refused == nil else { return }
         guard let root = GamesFolder.root else { status = "Choose a games folder first (Settings › Library): mods are unpacked on its drive."; return }
         installing = f.id; defer { installing = nil }
         let work = root.appendingPathComponent(".cartridge-mods/\(UUID().uuidString)"), out = work.appendingPathComponent("unpacked")
@@ -148,6 +192,7 @@ struct GBDetail { let mod: GBMod, description: String, authors: [String], files:
                 if level.isEmpty { break }
             }
             if src == out { while subdirs(src).count == 1, !marked(src) { src = subdirs(src)[0] } }
+            if let why = ModRules.refused(files: out) { status = "Not installed: this mod \(why == "replaces the game's code" ? "replaces the game's code" : "contains \(why)")."; return }
             let credit = "\(d.mod.name)\n\(d.mod.page?.absoluteString ?? "")\nby \(d.authors.joined(separator: ", "))\nDownloaded by Cartridge from GameBanana (\(f.name)).\n"
             let name = d.files.count > 1 ? "\(d.mod.name) – \(f.name.split(separator: ".").first ?? "")" : d.mod.name
             if let installed = mods.install(from: src, name: name, on: false, credit: credit) {
@@ -181,7 +226,7 @@ struct ModBrowserView: View {
             if model.gb == nil { pickGame } else { list }
             Divider()
             HStack {
-                Text("Mods come straight from GameBanana, made by their authors.").font(.footnote).foregroundStyle(.secondary)
+                Text("Mods come straight from GameBanana, made by their authors. Not offered: mods that replace the game's code, unlock paid content, are console system tools, or cheat online.").font(.footnote).foregroundStyle(.secondary)
                 Spacer()
                 if let s = model.status { Text(s).font(.footnote) }
             }.padding(8)
@@ -197,6 +242,7 @@ struct ModBrowserView: View {
                 Button("Change Game") { model.gb = nil }.buttonStyle(.link)
                 Spacer()
                 TextField("Search", text: $model.search).textFieldStyle(.roundedBorder).frame(width: 200).onSubmit { Task { await model.reload() } }
+                Toggle("Mature", isOn: $model.showMature).help("Show mods GameBanana rates for mature content")
                 Picker("", selection: $model.sort) { ForEach(ModBrowserModel.Sort.allCases, id: \.self) { Text($0.label).tag($0) } }
                     .labelsHidden().frame(width: 170).onChange(of: model.sort) { Task { await model.reload() } }
             } else { Text("Which game on GameBanana?").font(.headline); Spacer() }
@@ -212,7 +258,7 @@ struct ModBrowserView: View {
                 Text("These mods were made for the Switch version of the game. When you turn one on, Cartridge carries its changes over to this edition where it can.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            ForEach(model.list) { m in
+            ForEach(model.shown) { m in
                 Button { Task { await model.open(m) } } label: {
                     HStack(alignment: .top, spacing: 10) {
                         AsyncImage(url: m.thumb) { $0.resizable().scaledToFill() } placeholder: { Color.secondary.opacity(0.15) }
@@ -260,12 +306,13 @@ struct ModDetailView: View {
                                 .compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if model.installing == f.id { ProgressView().controlSize(.small) }
+                    if let why = d.refused { Text("Not offered: \(why)").font(.caption).foregroundStyle(.secondary) }
+                    else if model.installing == f.id { ProgressView().controlSize(.small) }
                     else { Button("Install") { Task { await model.install(f, of: d) } }.disabled(model.installing != nil) }
                 }
             }.frame(minHeight: 140)
             if let s = model.status { Text(s).font(.footnote) }
-            Text("Installed mods start off. Mods that add a code module only have their files used.").font(.footnote).foregroundStyle(.secondary)
+            Text("Installed mods start off. A mod that replaces the game's code can't be used and isn't installed.").font(.footnote).foregroundStyle(.secondary)
         }
         .padding().frame(minWidth: 620, minHeight: 420)
     }
