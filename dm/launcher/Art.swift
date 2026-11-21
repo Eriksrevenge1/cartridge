@@ -46,7 +46,7 @@ final class Covers: ObservableObject {
         return img
     }
     /// The app's icon file itself (NSWorkspace's icon is a 32-point rendering with the system's mask)
-    private static func icon(_ g: Game) -> NSImage? {
+    static func icon(_ g: Game) -> NSImage? {
         guard let info = NSDictionary(contentsOf: g.contents.appendingPathComponent("Info.plist")), let name = info["CFBundleIconFile"] as? String else { return nil }
         return NSImage(contentsOf: g.contents.appendingPathComponent("Resources").appendingPathComponent(name.hasSuffix(".icns") ? name : name + ".icns"))
     }
@@ -62,6 +62,17 @@ final class Covers: ObservableObject {
         RecentFile.write(Library.shared.games)
     }
     func hasCustom(_ g: Game) -> Bool { FileManager.default.fileExists(atPath: Covers.custom(g).path) }
+    /// A game with no icon of its own (a Switch 2 .nup or a dump packs none) and no cover you chose: the store's artwork becomes its cover by itself, once
+    /// (Builder.storeArt: only the title ID goes to nintendo.com). Find Cover… and Choose Cover… still replace it
+    private var autoTried = Set<String>()
+    func autoCover(_ g: Game) {
+        guard !autoTried.contains(g.titleID), !hasCustom(g), Covers.icon(g) == nil else { return }
+        autoTried.insert(g.titleID)
+        Task { @MainActor in
+            guard let art = await Builder.storeArt(g.titleID.lowercased()) else { return }
+            if !self.hasCustom(g) { self.setCustom(g, from: art) }
+        }
+    }
 
     /// The game page's accent, taken from its art (nil: the art is too grey to have one, so the system's accent stays)
     func accent(_ g: Game) -> Color? {

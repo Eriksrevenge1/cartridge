@@ -24,7 +24,8 @@ struct BuildRequest: Identifiable, Hashable {
 
 final class BuildJob: ObservableObject, Identifiable {
     let id = UUID()
-    let request: BuildRequest
+    var request: BuildRequest
+    var artTried = false   // the store's artwork was looked for (storeArt)
     @Published var stage = "Waiting"
     @Published var step = ""
     @Published var stageK = 0
@@ -106,8 +107,32 @@ final class Builder: ObservableObject {
         }
         return game ? dir : nil
     }
+    /// The game's files hold no icon: a Switch 2 .nup, or a dump folder (base/), which have no control data
+    static func carriesNoIcon(_ u: URL) -> Bool {
+        if u.pathExtension.lowercased() == "nup" { return true }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: u.path)) ?? []
+        return names.contains("base") || (names.contains { $0.lowercased().hasSuffix(".nup") } && !names.contains { [".nsp", ".xci", ".nsz", ".xcz"].contains(where: $0.lowercased().hasSuffix) })
+    }
+    /// The 16-digit title ID in a file's name, or in the name of a game file in a folder ([0400…000])
+    static func titleID(in u: URL) -> String? {
+        let names = u.hasDirectoryPath ? ((try? FileManager.default.contentsOfDirectory(atPath: u.path)) ?? []) : [u.lastPathComponent]
+        for n in names { if let r = n.range(of: #"\[[0-9A-Fa-f]{16}\]"#, options: .regularExpression) { return String(n[r].dropFirst().dropLast()).lowercased() } }
+        return nil
+    }
+    /// The store's square key art for a title ID (else its first picture), downloaded to a temporary file; nil when the store has none or cannot be reached
+    static func storeArt(_ tid: String) async -> URL? {
+        async let eu = CoverFinder.europe(tid)
+        async let shop = CoverFinder.eshop(tid)
+        let all = await eu + shop
+        guard let pick = all.first(where: \.square) ?? all.first else { return nil }
+        var r = URLRequest(url: pick.url, timeoutInterval: 30); r.setValue("Mozilla/5.0 (Macintosh)", forHTTPHeaderField: "User-Agent")
+        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, NSImage(data: d) != nil else { return nil }
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("nxnative-art-\(tid).\(pick.url.pathExtension.isEmpty ? "jpg" : pick.url.pathExtension)")
+        return (try? d.write(to: out)) != nil ? out : nil
+    }
     /// The app's current icon as a PNG for --fallback-icon, so a rebuild keeps an icon the player gave a game that has none of its own; nil when the app has no icon file
     static func iconPNG(of g: Game) -> URL? {
+        if Covers.icon(g) == nil, Covers.shared.hasCustom(g) { return Covers.custom(g) }   // no icon in the app, but a cover (yours, or the store's): the app takes it
         guard let info = NSDictionary(contentsOf: g.contents.appendingPathComponent("Info.plist")), let name = info["CFBundleIconFile"] as? String else { return nil }
         let icns = g.contents.appendingPathComponent("Resources").appendingPathComponent(name.hasSuffix(".icns") ? name : name + ".icns")
         guard let img = NSImage(contentsOf: icns), let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return nil }
@@ -171,6 +196,17 @@ final class Builder: ObservableObject {
     }
 
     private func start(_ j: BuildJob) {
+        // A .nup or a dump folder carries no icon (no control data), and the app would have none, nor its cover: the store's artwork for the game's title ID is looked up
+        // first (as Find Cover… does; only the title ID goes to nintendo.com) and given to the build as its icon. Not when an icon is given already (a rebuild keeps its own)
+        if !j.artTried, j.request.fallbackIcon == nil, Builder.carriesNoIcon(j.request.source), let tid = Builder.titleID(in: j.request.source) {
+            j.artTried = true; j.stage = "Looking up the game's artwork"
+            Task { @MainActor in
+                if let art = await Builder.storeArt(tid) { j.request.fallbackIcon = art; j.lines.append("Icon: the store's artwork for \(tid) (no icon in the game's files)") }
+                else { j.lines.append("Icon: none in the game's files, and none found in the store for \(tid); use Find Cover… after the build") }
+                self.start(j)
+            }
+            return
+        }
         let r = j.request
         let p = Process()
         p.executableURL = URL(fileURLWithPath: python)
