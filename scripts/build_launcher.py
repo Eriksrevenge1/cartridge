@@ -66,6 +66,54 @@ def widget(stage, t, swiftc, sdk, minos, identity):
     run(['codesign', '--force', '--sign', identity, '--entitlements', ent, appex])
 
 
+# The engine Cartridge carries (dm/launcher/Engine.swift unpacks it on the games folder's drive): the repository's files as committed paths (docs left out) in
+# Resources/engine.tar, and a standalone Python (python-build-standalone, the version the user's builds run) with the NSP script's modules in Resources/python.tar.
+# Xcode stays a requirement: every build compiles the host and the shaders with its compilers, which cannot be shipped (the Setup Assistant handles it)
+PY_RELEASE, PY_VERSION = '20261110', '3.15.2'
+PY_MODULES = ['lz4', 'capstone>=5,<6', 'fonttools', 'nsz', 'zbic']
+CACHE = ROOT / 'dm/launcher/.cache'   # downloads kept between builds (git ignores it)
+
+
+def bundle_engine(res):
+    files = [f for f in run(['git', '-C', ROOT, 'ls-files']).splitlines() if not f.startswith('docs/')]
+    lst = CACHE / 'engine-files.txt'; CACHE.mkdir(parents=True, exist_ok=True); lst.write_text('\n'.join(files) + '\n')
+    # the commit the engine is, for the apps it packs (dm/mac/pack_app.py source_commit: the engine has no .git): +dirty with uncommitted changes to tracked files
+    head = run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD']).strip()
+    dirty = run(['git', '-C', ROOT, 'status', '--porcelain', '--untracked-files=no']).strip()
+    (CACHE / 'ENGINE_COMMIT').write_text(head + ('+dirty' if dirty else '') + '\n')
+    run(['tar', '-c', '-f', res / 'engine.tar', '-C', ROOT, '-T', lst])
+    run(['tar', '-r', '-f', res / 'engine.tar', '-C', CACHE, 'ENGINE_COMMIT'])   # appended: bsdtar takes a -C after -T before reading the list
+    print(f'build_launcher: engine: {len(files)} files, {(res / "engine.tar").stat().st_size / 2**20:.0f} MB')
+
+
+def engine_version(res, commit):   # the commit and the packed files' hash: a build with uncommitted changes is another version
+    import hashlib
+    h = hashlib.sha256()
+    with open(res / 'engine.tar', 'rb') as f:
+        for b in iter(lambda: f.read(1 << 22), b''): h.update(b)
+    return f'{commit}-{h.hexdigest()[:8]}'
+
+
+def bundle_python(res, t):
+    name = f'cpython-{PY_VERSION}+{PY_RELEASE}-aarch64-apple-darwin-install_only_stripped.tar.gz'
+    tgz = CACHE / name
+    if not tgz.is_file():
+        CACHE.mkdir(parents=True, exist_ok=True)
+        print(f'build_launcher: downloading {name}')
+        run(['curl', '-fsSL', '-o', tgz, f'https://github.com/astral-sh/python-build-standalone/releases/download/{PY_RELEASE}/{name}'])
+    ready = CACHE / f'python-{PY_VERSION}-{PY_RELEASE}.tar'   # the Python with its modules installed, made once per version and module list
+    stamp = CACHE / (ready.name + '.modules')
+    if not ready.is_file() or not stamp.is_file() or stamp.read_text() != ' '.join(PY_MODULES):
+        work = Path(t) / 'pyroot'; work.mkdir()
+        run(['tar', '-x', '-z', '-f', tgz, '-C', work])
+        py = work / 'python/bin/python3'
+        run([py, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location', *PY_MODULES])
+        run(['tar', '-c', '-f', ready, '-C', work, 'python'])
+        stamp.write_text(' '.join(PY_MODULES))
+    shutil.copyfile(ready, res / 'python.tar')
+    print(f'build_launcher: python {PY_VERSION} with {", ".join(m.split(">")[0] for m in PY_MODULES)}')
+
+
 def min_os():   # the Mac host's minimum macOS (dm/mac/min_os.mk)
     m = re.search(r'^MACOS_MIN\s*:=\s*(\S+)', (ROOT / 'dm/mac/min_os.mk').read_text(), re.M)
     return m.group(1) if m else '26.6'
@@ -75,6 +123,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--out', type=Path, default=Path('/Applications'), help='folder to put the app in (default /Applications, which the Apps list shows)')
     ap.add_argument('--open', action='store_true', help='start the app when it is built')
+    ap.add_argument('--no-engine', action='store_true', help='leave the engine and its Python out (a quick build while working on Cartridge itself; it then builds games from DMRepo)')
     ap.add_argument('--sign', metavar='IDENTITY', help='sign with this Apple Development identity (security find-identity -p codesigning; a free Apple ID makes one in Xcode › Settings › '
                     'Accounts) and include the Last Played widget, which macOS runs only from an app signed with a developer team; default: ad hoc, without the widget')
     a = ap.parse_args()
@@ -95,6 +144,7 @@ def main():
              '-module-cache-path', Path(t) / 'module-cache', '-o', macos / EXE, *sources(),
              '-framework', 'AppKit', '-framework', 'SwiftUI', '-framework', 'GameController', '-framework', 'IOKit', '-framework', 'WidgetKit'])
         if a.sign: widget(stage, t, swiftc, sdk, minos, a.sign)
+        if not a.no_engine: bundle_engine(stage / 'Contents/Resources'); bundle_python(stage / 'Contents/Resources', t)
         commit = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True).stdout.strip()
         with open(stage / 'Contents/Info.plist', 'wb') as f:
             plistlib.dump({
@@ -103,6 +153,7 @@ def main():
                 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
                 'LSApplicationCategoryType': 'public.app-category.games', 'DMCommit': commit,
                 'CFBundleURLTypes': [{'CFBundleURLName': BUNDLE_ID, 'CFBundleURLSchemes': ['cartridge']}],   # cartridge:// links (dm/launcher/Router.swift)
+                **({'DMEngine': engine_version(stage / 'Contents/Resources', commit)} if not a.no_engine else {}),
                 'DMRepo': str(ROOT), 'DMPython': sys.executable,   # where the Build window runs build_ipa_from_nsp.py, and with what (changeable in its settings)
             }, f)
         run(['codesign', '--force', '--sign', a.sign or '-', stage])   # ad hoc by default, as the linker signs any arm64 binary: the bundle's seal covers Info.plist too

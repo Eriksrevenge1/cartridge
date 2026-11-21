@@ -21,6 +21,7 @@ struct LauncherApp: App {
             LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder)
                 .frame(minWidth: 860, minHeight: 560)
                 .modifier(SetupOnFirstStart())
+                .task { Engine.shared.ensure() }   // a new Cartridge's engine unpacked on the games folder's drive
                 .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder; appearance.apply() }
                 .onChange(of: appearance) { appearance.apply() }
         }

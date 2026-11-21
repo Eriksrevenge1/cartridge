@@ -142,7 +142,10 @@ def source_commit():   # DMCommit: the checkout that packed the app (scripts/bug
     try:
         head = subprocess.run(['git', '-C', repo, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
         dirty = subprocess.run(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'], capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError): return None
+    except (OSError, subprocess.CalledProcessError):
+        # an engine Cartridge carries has no .git: scripts/build_launcher.py writes its commit beside the files (ENGINE_COMMIT)
+        f = repo / 'ENGINE_COMMIT'
+        return f.read_text().strip() or None if f.is_file() else None
     return head + ('+dirty' if dirty else '') if head else None
 
 

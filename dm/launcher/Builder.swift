@@ -72,10 +72,14 @@ final class Builder: ObservableObject {
     }
     private var watch: NSObjectProtocol?
 
-    var script: URL { URL(fileURLWithPath: repo).appendingPathComponent("scripts/build_ipa_from_nsp.py") }
+    /// What builds run: the engine Cartridge carries, once unpacked (Engine.swift), else your own checkout and Python (Settings › Building)
+    var runRepo: String { Engine.shared.builtIn ? (Engine.shared.installedDir?.path ?? "") : repo }
+    var runPython: String { Engine.shared.builtIn ? (Engine.shared.python?.path ?? "") : python }
+    var script: URL { URL(fileURLWithPath: runRepo).appendingPathComponent("scripts/build_ipa_from_nsp.py") }
     var ready: String? {   // why a build cannot start, or nil
         if !FileManager.default.fileExists(atPath: script.path) { return "Set the nxnative repository folder (Build Settings): \(script.path) is missing." }
-        if !FileManager.default.isExecutableFile(atPath: python) { return "Set Python (Build Settings): \(python) is not a program." }
+        if Engine.shared.builtIn && Engine.shared.installedDir == nil { return Engine.shared.status.isEmpty ? "The engine is not unpacked yet." : Engine.shared.status }
+        if !FileManager.default.isExecutableFile(atPath: runPython) { return "Set Python (Build Settings): \(runPython) is not a program." }
         return nil
     }
     func needsKeys(_ u: URL) -> Bool {   // NSPs need prod.keys; a .nup and a dump folder do not
@@ -209,9 +213,9 @@ final class Builder: ObservableObject {
         }
         let r = j.request
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: python)
+        p.executableURL = URL(fileURLWithPath: runPython)
         p.arguments = arguments(r)
-        p.currentDirectoryURL = URL(fileURLWithPath: repo)
+        p.currentDirectoryURL = URL(fileURLWithPath: runRepo)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (env["PATH"] ?? "")   // a GUI app's PATH lacks Homebrew's tools
         env["PYTHONUNBUFFERED"] = "1"
@@ -593,10 +597,18 @@ struct JobRow: View {
 
 struct BuildSettingsView: View {
     @EnvironmentObject var builder: Builder
+    @ObservedObject var engine = Engine.shared
     var body: some View {
         Form {
-            TextField("nxnative repository", text: $builder.repo)
-            TextField("Python", text: $builder.python)
+            if Engine.shared.bundled {
+                Toggle("Build with the engine Cartridge carries (\(Engine.shared.version ?? ""))", isOn: Binding(get: { engine.builtIn }, set: { engine.builtIn = $0; engine.ensure() }))
+                Text(engine.builtIn ? (engine.installedDir?.path ?? engine.status) : "Off: builds use your own nxnative checkout and Python, below (for working on nxnative itself).")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if !engine.builtIn {
+                TextField("nxnative repository", text: $builder.repo)
+                TextField("Python", text: $builder.python)
+            }
             HStack { TextField("prod.keys", text: $builder.keys); Button("Choose…") {
                 let p = NSOpenPanel(); p.canChooseFiles = true; if p.runModal() == .OK, let u = p.url { builder.keys = u.path } } }
             if let why = builder.ready { Text(why).foregroundStyle(.red).font(.footnote) } else { Text("Ready to build.").foregroundStyle(.green).font(.footnote) }

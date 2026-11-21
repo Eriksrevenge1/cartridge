@@ -50,7 +50,7 @@ final class Setup: ObservableObject {
             DispatchQueue.main.async { self.items = found }
         }
     }
-    static let titles = ["repo": "nxnative", "xcode": "Xcode", "xcodeSetup": "Xcode's licence and first launch", "metal": "Metal toolchain",
+    static let titles = ["repo": "Engine (nxnative)", "xcode": "Xcode", "xcodeSetup": "Xcode's licence and first launch", "metal": "Metal toolchain",
                          "ios": "iOS platform (iPhone and iPad builds only)", "brew": "Homebrew", "tools": "xcodegen, zstd and glslang", "python": "Python and its modules",
                          "keys": "Your prod.keys", "games": "Games folder"]
 
@@ -58,6 +58,11 @@ final class Setup: ObservableObject {
         var it = SetupItem(id: id, title: Setup.titles[id] ?? id)
         let fm = FileManager.default
         switch id {
+        case "repo" where Engine.shared.builtIn:
+            let e = Engine.shared
+            if e.isInstalled { it.state = .ok; it.detail = "Built in: \(e.version ?? "") at \(e.dir?.path ?? "")" }
+            else if GamesFolder.root == nil { it.state = .missing; it.detail = "Choose your games folder below first: the engine is unpacked on its drive." }
+            else { it.state = .missing; it.fix = "Unpack"; it.detail = e.status.isEmpty ? "Cartridge's engine \(e.version ?? "") is not unpacked yet." : e.status }
         case "repo":
             if fm.fileExists(atPath: repo + "/scripts/build_ipa_from_nsp.py") { it.state = .ok; it.detail = repo }
             else { it.state = .missing; it.detail = repo.isEmpty ? "Not set." : "No nxnative checkout at \(repo)."; it.fix = "Choose Folder…" }
@@ -93,6 +98,8 @@ final class Setup: ObservableObject {
             let need = ["xcodegen", "zstd", "glslangValidator"].filter { Setup.which($0) == nil }
             if need.isEmpty { it.state = .ok; it.detail = "All three are installed." }
             else { it.state = .missing; it.detail = "Missing: \(need.map { $0 == "glslangValidator" ? "glslang" : $0 }.joined(separator: ", "))."; it.fix = Setup.brew == nil ? nil : "Install" }
+        case "python" where Engine.shared.builtIn:
+            it.state = .ok; it.detail = "Built in: Python with every module, in the engine."
         case "python":
             let script = "import sys,platform,importlib.util; m=[n for n in [\(Setup.pythonModules.map { "'\($0)'" }.joined(separator: ","))] + (['backports.zstd'] if sys.version_info < (3,14) else []) if importlib.util.find_spec(n) is None]; print(sys.version.split()[0], platform.machine(), ','.join(m))"
             let (c, out) = fm.isExecutableFile(atPath: python) ? shell(python, ["-c", script]) : (1, "")
@@ -133,6 +140,7 @@ final class Setup: ObservableObject {
     // MARK: fixes
     func fix(_ id: String) {
         switch id {
+        case "repo" where Engine.shared.builtIn: Engine.shared.ensure(); DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.check() }
         case "repo": if let u = pick(dir: true, "Choose your nxnative folder (the one with scripts/ and dm/ in it)") { store.set(u.path, forKey: "build.repo"); check() }
         case "xcode": NSWorkspace.shared.open(URL(string: "https://developer.apple.com/download/all/?q=Xcode%20\(Setup.xcodeVersion)")!)
         case "xcodeSetup":
@@ -151,7 +159,7 @@ final class Setup: ObservableObject {
         case "games":
             let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
             p.message = "Choose or make your games folder (on the drive with room for your games)"
-            if p.runModal() == .OK, let u = p.url { GamesFolder.set(u); check() }
+            if p.runModal() == .OK, let u = p.url { GamesFolder.set(u); Engine.shared.ensure(); check() }
         default: break
         }
     }
