@@ -89,6 +89,13 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Check:** `make -C dm/host/tests GAME=<id> build/t_friends`, then `dm/host/tests/build/t_friends`, resolves both overloads by their actual registered names and checks the failure result and untouched output for both local flags, including guest bool arguments with upper bits set.
 - **Found on:** [Super Nintendo Entertainment System – Nintendo Classics](../../dm/games/01008D300C50C000/README.md) (`01008D300C50C000`, 6.0.0, SDK 20.5.21, `main+0xc608`). [PR #2162](https://github.com/seedds/nxnative/pull/2162) reports the original abort and a Mac boot past it with separate mission-events and profile changes.
 
+### Friend-ID lists and network error Results on SDK 7
+
+- **Symptom:** `friends::GetFriendList` or `err::ShowNetworkServiceError` enters the SDK's service path despite the host's offline replacements.
+- **Cause:** the account-ID list overloads (with and without `Uid`) and the error overload taking `nn::Result` were not registered. The existing hooks cover `Friend` objects and an `ErrorCode` pair, which have different exported names and argument layouts.
+- **Fix:** both account-ID list overloads follow the host's offline policy. They return `RES_FAIL`, set the count to zero, and leave the ID array untouched. The Result overload logs the module and description and sends the usual applet enter and leave notifications.
+- **Found on:** Super Kirby Clash 1.0.1, SDK 7.4.0, in [PikaMan80's patch for issue #987](https://github.com/seedds/nxnative/issues/987).
+
 ### SDK 6's `account::OpenPreselectedUser` returns a Result
 
 - **Symptom:** the first loading screen never ends; `DM_FS=1` shows `save:/system` "not found" and no `fs mount save`.
@@ -1271,6 +1278,13 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Symptom:** play report calls met entering the save select (3D World); undefined `nn::ldn::` / `nn::socket::` imports with no hook, found from the import list before they were met (Big Brain Academy).
 - **Fix:** hooked (`hle_net.c`, `hle_offline.c`): the `nifm` IP queries with SDK 10's `socket::InAddr` / `in_addr` mangling; `prepo::AddSessionId` / `AddInternetConnectionStatus`; `ldn::GetNetworkConfig`; SDK 11's socket overloads with plain `sockaddr` / `int` arguments (`Connect`, `Accept`, `GetSockName`, `Get` / `SetSockOpt`, `Fcntl`, `Recv`, `Send`).
 - **Found on:** [Super Mario 3D World + Bowser's Fury](../../dm/games/010028600EBDA000/README.md) (SDK 10: `nifm`, `prepo`); [Big Brain Academy: Brain vs. Brain](../../dm/games/0100620012D6E000/README.md) (SDK 11.4.3: LDN, sockets).
+
+### Play report upload status
+
+- **Symptom:** a won Chambara match ends in `nn::diag` abort Result `0xe15`, after `[RED] sf: the game connects to service prepo:u itself`.
+- **Cause:** the SDK's `nn::prepo::GetTransmissionStatus` opens `prepo:u` through `sm`. The host has no play report service process, and `sm` returns ResultNotRegistered.
+- **Fix:** `hle_offline.c` answers success with status 0 (idle). The offline host discards reports, so the upload queue is always empty.
+- **Found on:** Nintendo Switch Sports 1.5.0 (SDK 13.3.4), with a won match replayed after the fix in [PR #2908](https://github.com/seedds/nxnative/pull/2908).
 
 ### SDK 21 socket initialization and overloads
 
