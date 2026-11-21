@@ -575,6 +575,13 @@ def pack(a):
     if commit: info['DMCommit'] = commit
     gh = HERE.parent.parent / 'ENGINE_GAMEHASH'   # the engine Cartridge carries: the fingerprint of what reaches the app (scripts/build_launcher.py), for Cartridge's rebuild check
     if gh.is_file(): info['DMEngineHash'] = gh.read_text().strip()
+    # and split: the shared engine's fingerprint, and the app's profile with its own, so an update that changes only other games' profiles asks nothing of this one
+    sh, ph = gh.with_name('ENGINE_SHAREDHASH'), gh.with_name('ENGINE_PROFILEHASHES')
+    if sh.is_file(): info['DMEngineSharedHash'] = sh.read_text().strip()
+    prof = Path(a.tables).name; info['DMProfile'] = prof
+    if ph.is_file():
+        hit = [l.split('\t')[1] for l in ph.read_text().splitlines() if l.split('\t')[0].upper() == prof.upper() and '\t' in l]
+        if hit: info['DMProfileHash'] = hit[0]
     if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]   # the library chain the app carries (a Vulkan or GL game's vk / gl has none)
     (c / 'Info.plist').write_bytes(plistlib.dumps(info))
     (c / 'PkgInfo').write_text('APPL????')

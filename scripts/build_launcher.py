@@ -83,15 +83,22 @@ def bundle_engine(res):
     (CACHE / 'ENGINE_COMMIT').write_text(head + ('+dirty' if dirty else '') + '\n')
     # what reaches a game's app, as one fingerprint (dm/mac/pack_app.py records it as DMEngineHash; Health.swift asks for a rebuild only when it differs, not when
     # Cartridge itself changed): the content of the host, graphics, Mac app, tools, scripts, the game profiles and the settings list
+    # Split as well, so Cartridge asks to rebuild only the games an update reaches (Health.swift): ENGINE_SHAREDHASH, everything but the game profiles (the host, the
+    # graphics, the tools, the shared files of dm/games, which reach every game), and ENGINE_PROFILEHASHES, one line per profile folder dm/games/<id> (id, fingerprint), which
+    # reach only the games packed from them (pack_app.py records the app's profile and its fingerprint)
     import hashlib
-    h = hashlib.sha256()
+    h, shared, per = hashlib.sha256(), hashlib.sha256(), {}
     for f in sorted(f for f in files if f.startswith(('dm/host/', 'dm/gfx/', 'dm/mac/', 'dm/tools/', 'dm/games/', 'dm/third_party/', 'scripts/build_ipa_from_nsp.py'))):
-        h.update(f.encode() + b'\0')
-        try: h.update((ROOT / f).read_bytes())
-        except OSError: pass
+        try: data = (ROOT / f).read_bytes()
+        except OSError: data = b''
+        h.update(f.encode() + b'\0' + data)
+        m = re.match(r'dm/games/([0-9A-Fa-f]{16})/', f)
+        (per.setdefault(m[1], hashlib.sha256()) if m else shared).update(f.encode() + b'\0' + data)
     (CACHE / 'ENGINE_GAMEHASH').write_text(h.hexdigest()[:16] + '\n')
+    (CACHE / 'ENGINE_SHAREDHASH').write_text(shared.hexdigest()[:16] + '\n')
+    (CACHE / 'ENGINE_PROFILEHASHES').write_text(''.join(f'{k}\t{v.hexdigest()[:16]}\n' for k, v in sorted(per.items())))
     run(['tar', '-c', '-f', res / 'engine.tar', '-C', ROOT, '-T', lst])
-    run(['tar', '-r', '-f', res / 'engine.tar', '-C', CACHE, 'ENGINE_COMMIT', 'ENGINE_GAMEHASH'])   # appended: bsdtar takes a -C after -T before reading the list
+    run(['tar', '-r', '-f', res / 'engine.tar', '-C', CACHE, 'ENGINE_COMMIT', 'ENGINE_GAMEHASH', 'ENGINE_SHAREDHASH', 'ENGINE_PROFILEHASHES'])   # appended: bsdtar takes a -C after -T before reading the list
     print(f'build_launcher: engine: {len(files)} files, {(res / "engine.tar").stat().st_size / 2**20:.0f} MB')
 
 

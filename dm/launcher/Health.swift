@@ -28,12 +28,25 @@ enum Health {
         }
         let info = NSDictionary(contentsOf: g.contents.appendingPathComponent("Info.plist"))
         // built with the engine Cartridge carries: an app from another engine version asks for a rebuild (an update brought a newer one)
-        // compared by the fingerprint of what reaches a game (ENGINE_GAMEHASH, the app's DMEngineHash), not the commit: a Cartridge-only change asks for nothing.
+        // compared by the fingerprint of what reaches a game, not the commit: a Cartridge-only change asks for nothing.
         // An app without one (built before, or from your own checkout) is not judged
+        // An app packed with the split fingerprints (DMEngineSharedHash, DMProfile and DMProfileHash; ENGINE_SHAREDHASH and ENGINE_PROFILEHASHES in the engine) asks only when the
+        // update reaches it: the shared engine changed (every game), or its own profile did; changes to other games' profiles ask nothing
         if Engine.shared.builtIn, let dir = Engine.shared.installedDir {
-            let now = (try? String(contentsOf: dir.appendingPathComponent("ENGINE_GAMEHASH"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let now, let built = info?["DMEngineHash"] as? String, built != now {
-                let c = (try? String(contentsOf: dir.appendingPathComponent("ENGINE_COMMIT"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            func read(_ n: String) -> String? { (try? String(contentsOf: dir.appendingPathComponent(n), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let c = read("ENGINE_COMMIT") ?? ""
+            if let builtShared = info?["DMEngineSharedHash"] as? String, let nowShared = read("ENGINE_SHAREDHASH") {
+                if builtShared != nowShared {
+                    out.append(HealthFinding(level: .info, text: "An update to nxnative reaches every game (\(c)): Rebuild to update."))
+                } else if let prof = info?["DMProfile"] as? String, let builtProf = info?["DMProfileHash"] as? String,
+                          let table = read("ENGINE_PROFILEHASHES") {
+                    let now = table.split(separator: "\n").first { $0.split(separator: "\t").first.map { $0.uppercased() == prof.uppercased() } ?? false }?
+                        .split(separator: "\t").dropFirst().first.map(String.init)
+                    if let now, now != builtProf { out.append(HealthFinding(level: .info, text: "An update changed this game's profile (\(c)): Rebuild to update.")) }
+                }
+                return out
+            }
+            if let now = read("ENGINE_GAMEHASH"), let built = info?["DMEngineHash"] as? String, built != now {   // an app packed before the split
                 out.append(HealthFinding(level: .info, text: "Built with another nxnative than the one Cartridge builds with (\(c)): Rebuild to update."))
             }
             return out
