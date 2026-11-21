@@ -54,6 +54,8 @@ jobs:
           git remote add upstream "https://github.com/$UPSTREAM"
           git fetch -q upstream main
           up=$(git rev-parse upstream/main)
+          # the fork's own main mirrors upstream's (Cartridge is on launcher; nothing of the fork's is on main)
+          git push -q origin "$up:refs/heads/main" 2>&1 || echo "::warning::the fork's main could not be updated to upstream's (it holds commits of its own?)"
           if git merge-base --is-ancestor "$up" HEAD; then
             # nothing to merge; the branch's newest commit still gets its release (a merge resolved by hand, Cartridge's own work)
             if gh release view "cartridge-$(git rev-list --count HEAD)" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
