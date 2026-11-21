@@ -61,5 +61,19 @@ class Table(unittest.TestCase):
             if s == 'pending': self.assertTrue(r['branch'].startswith('pr/'), f'{r["id"]}: a pending change names its branch')
 
 
+
+class CiChecks(unittest.TestCase):
+    def test_failing_checks_split_by_upstreams_main(self):
+        checks = [{'name': 'Tool tests', 'state': 'FAILURE', 'workflow': 'tests'},
+                  {'name': 'clang-tidy (ratchet)', 'state': 'FAILURE', 'workflow': 'lint-c'},
+                  {'name': 'Build check', 'state': 'SUCCESS', 'workflow': 'tests'},
+                  {'name': 'Sanitizers', 'state': 'PENDING', 'workflow': 'tests'}]
+        ours, theirs = us.ci('seedds/nxnative', 1, checks, lambda wf: wf == 'tests')
+        self.assertEqual(ours, ['clang-tidy (ratchet)'])
+        self.assertEqual(theirs, ['Tool tests'])
+
+    def test_nothing_failing(self):
+        self.assertEqual(us.ci('r', 1, [{'name': 'a', 'state': 'SUCCESS', 'workflow': 'w'}], lambda wf: True), ([], []))
+
 if __name__ == '__main__':
     unittest.main()

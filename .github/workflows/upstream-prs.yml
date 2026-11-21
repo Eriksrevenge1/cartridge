@@ -111,14 +111,21 @@ jobs:
                Where a maintainer asked for changes you have not answered, make them on the branch, run the checks CONTRIBUTING.md names for what the change
                touches (the GPU and game checks cannot run here: say so), push the branch (`git push origin <branch>`) and reply on the pull request with what
                changed. Never argue a declined change; leave it.
-            2. Send: take the first row with status `pending` whose `base` is `-` or a row that is `landed` (none whose base is still pending or forwarded). Rebase
+            2. Keep the forwarded ones green and current: run `python3 dm/tools/upstream_status.py` (it lists, per row, CI checks that fail while upstream's main
+               passes them, "ours to fix", and branches that no longer apply on upstream's main). For each: read the failing check's log
+               (`gh pr checks N --repo ${{ env.UPSTREAM }}`, then `gh run view <id> --repo ${{ env.UPSTREAM }} --log-failed`), find the cause in our change and fix it
+               on the branch (a flaky or unrelated failure: rerun it with `gh run rerun <id> --failed --repo ${{ env.UPSTREAM }}` once, and leave it if it fails the
+               same way on main's tree); rebase a branch that no longer applies on upstream/main, regenerating dmsh_chain.h and the symptom index where needed, and
+               rebase the rows whose `base` is it on top. Run the checks, push with `--force-with-lease`, and say on the pull request what changed in one line.
+               Failures upstream's main has too are not ours: leave them.
+            3. Send: take the first row with status `pending` whose `base` is `-` or a row that is `landed` (none whose base is still pending or forwarded). Rebase
                its branch on upstream/main (`git rebase upstream/main`, resolving conflicts so the change still does what its commit says), regenerate what
                upstream's rules ask (`dmsh_chain.py --header` after a chain change, `docs_symptoms.py` after docs/reference changes), run the checks, push it to
                origin with `--force-with-lease`, and open it: `gh pr create --repo ${{ env.UPSTREAM }} --base main --head ${{ github.repository_owner }}:<branch>`
                with the title of its commit and a body as upstream's pull request template asks: what and why (from the commit message), what was checked
                (the tests you ran, the game checks from the commit message or "not run: GitHub's Macs have no Metal 4"), the docs changed. No mention of Cartridge.
                Open at most one pull request.
-            3. Record it: in docs/upstream.tsv set that row's status to `forwarded ${{ env.UPSTREAM }}#<number>`, commit
+            4. Record it: in docs/upstream.tsv set that row's status to `forwarded ${{ env.UPSTREAM }}#<number>`, commit
                ("docs/upstream: <id> forwarded as #<number>") and push to origin ${{ env.BRANCH }}.
             If a step cannot be done properly (a conflict that changes what the change does, a failing check you cannot fix), do not send it: write why to
             claude-report.md (not committed) and stop.

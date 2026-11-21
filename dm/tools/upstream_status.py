@@ -9,7 +9,9 @@ For a row forwarded as seedds/nxnative#N it asks GitHub (gh) about the pull requ
 maintainer closes pull requests and commits them himself, so a closed pull request is not a declined one. A merged pull request, or such a commit, makes the row
 landed <sha>. A pull request closed with no such commit becomes fork-only (declined #N) only when it was closed as not planned or a maintainer's last comment says
 so; otherwise the row is flagged for the owner to look at. For each pending or forwarded row with a branch, a merge preview (git merge-tree) on upstream's main says
-whether the branch still applies, so a conflict shows before upstream merges anything. Exit status 0; 1 on an error (no table, no upstream ref).
+whether the branch still applies, so a conflict shows before upstream merges anything. For an open forwarded pull request it reads its CI checks: a failing check
+is the fork's to fix (flagged, and the workflow's Claude fixes it) unless the same workflow's newest finished run on upstream's main failed too, which makes it
+upstream's own (noted, nothing to do). Exit status 0; 1 on an error (no table, no upstream ref).
 """
 import argparse, json, re, subprocess, sys
 from pathlib import Path
@@ -40,6 +42,25 @@ def gh(args):   # a gh call's JSON (mocked in the tests)
     r = subprocess.run(['gh'] + args, capture_output=True, text=True)
     if r.returncode: raise RuntimeError(f'gh {" ".join(args)}: {r.stderr.strip()}')
     return json.loads(r.stdout or 'null')
+
+
+def gh_checks(repo, n):   # a pull request's checks; gh exits 1 while any fails and 8 while any is pending, with the JSON all the same
+    r = subprocess.run(['gh', 'pr', 'checks', str(n), '--repo', repo, '--json', 'name,state,workflow,link'], capture_output=True, text=True)
+    try: return json.loads(r.stdout or '[]')
+    except ValueError as e: raise RuntimeError(f'gh pr checks {n}: {r.stderr.strip()}') from e
+
+
+FAILED = {'FAILURE', 'ERROR', 'TIMED_OUT', 'STARTUP_FAILURE', 'ACTION_REQUIRED'}
+
+
+def ci(repo, n, checks, main_failing):
+    """(ours, upstreams): the failing checks of pull request n, split by whether the same workflow's newest finished run on upstream's main failed too.
+    main_failing(workflow) -> bool"""
+    ours, theirs = [], []
+    for c in checks or []:
+        if (c.get('state') or '').upper() not in FAILED: continue
+        (theirs if c.get('workflow') and main_failing(c['workflow']) else ours).append(c.get('name') or c.get('workflow') or '?')
+    return sorted(set(ours)), sorted(set(theirs))
 
 
 def git(args, check=True):
@@ -91,6 +112,15 @@ def applies(branch, upstream):
     return 'conflicts: ' + ' '.join(sorted(set(files))[:6])
 
 
+_main_runs = {}
+def main_failing(repo, workflow):   # whether the workflow's newest finished run on upstream's main failed (cached per run of this script)
+    if (repo, workflow) not in _main_runs:
+        try: runs = gh(['run', 'list', '--repo', repo, '--branch', 'main', '--workflow', workflow, '--status', 'completed', '--limit', '1', '--json', 'conclusion'])
+        except RuntimeError: runs = []
+        _main_runs[repo, workflow] = bool(runs) and runs[0].get('conclusion') == 'failure'
+    return _main_runs[repo, workflow]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--update', action='store_true', help='rewrite docs/upstream.tsv with the new statuses')
@@ -111,6 +141,12 @@ def main(argv=None):
             new, note = judge(r, log, pr)
             if new != r['status']: changed += 1; r['status'] = new
             if note: notes.append((r['id'], note))
+            if forwarded(new) and pr and pr.get('state') == 'OPEN':
+                try:
+                    ours, theirs = ci(repo, n, gh_checks(repo, n), lambda wf, repo=repo: main_failing(repo, wf))
+                except RuntimeError: ours, theirs = [], []
+                if ours: notes.append((r['id'], f"{repo}#{n}: CI fails ({', '.join(ours)}); upstream's main passes these: ours to fix"))
+                if theirs: print(f"note: {r['id']}: {repo}#{n} fails {', '.join(theirs)}, as upstream's main does: not ours")
         r['_applies'] = applies(r['branch'], a.upstream_ref) if r['branch'] not in ('', '-') and (r['status'] == 'pending' or forwarded(r['status'])) else ''
         if r['_applies'].startswith('conflicts'): notes.append((r['id'], f"{r['branch']} no longer applies on upstream's main ({r['_applies']})"))
     w = max(len(r['id']) for r in rows)
