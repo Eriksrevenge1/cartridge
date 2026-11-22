@@ -204,6 +204,7 @@ struct CoverArt: View {
 struct GameCard: View {
     let game: Game
     let playing: Bool
+    var picked = false
     var open: () -> Void
     var play: () -> Void
     @State private var hover = false
@@ -214,7 +215,8 @@ struct GameCard: View {
                     .overlay(CoverArt(game: game).scaleEffect(hover ? 1.09 : 1)
                         .animation(hover ? .easeOut(duration: 6) : .easeOut(duration: 0.5), value: hover))   // a slow push in while the pointer rests on it
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(hover ? AnyShapeStyle(LinearGradient(gradient: Brand.split, startPoint: .leading, endPoint: .trailing)) : AnyShapeStyle(Color.white.opacity(0.12)), lineWidth: hover ? 1.5 : 1))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(picked || hover ? AnyShapeStyle(LinearGradient(colors: [Covers.shared.pair(game).0, Covers.shared.pair(game).1], startPoint: .leading, endPoint: .trailing)) : AnyShapeStyle(Color.white.opacity(0.12)),
+                                   lineWidth: picked ? 3 : hover ? 1.5 : 1))   // the game in the banner is ringed in its colours
                 if hover || playing {
                     Button(action: play) {
                         Label(playing ? "Playing" : "Play", systemImage: playing ? "gamecontroller.fill" : "play.fill").font(.callout.bold())
@@ -243,7 +245,9 @@ struct GameCard: View {
 
 enum LibrarySort: String, CaseIterable, Identifiable { case recent = "Recently Played", name = "Name", time = "Most Played"; var id: String { rawValue } }
 
-/// The library's home: the backdrop, the wordmark, the game played last, and every game as a card, filtered by the search and sorted
+/// The library's home: the backdrop, the wordmark, the banner, and every game as a card, filtered by the search and sorted. The banner holds the game
+/// picked in the grid (a click on its card: the logo and backdrop take its colours), or the game played last while none is; a double-click plays, the banner's
+/// Game Page opens the game's page
 struct HomeGrid: View {
     let games: [Game]
     @Binding var selection: String?
@@ -252,10 +256,13 @@ struct HomeGrid: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.controlActiveState) private var active
     @ObservedObject private var covers = Covers.shared
-    /// The game played last, shown large while the whole library is listed (not during a search)
+    @State private var picked: String?
+    /// The game played last
+    private var last: Game? { library.games.filter { Stats.shared.of($0).last != nil }.max { (Stats.shared.of($0).last ?? .distantPast) < (Stats.shared.of($1).last ?? .distantPast) } }
+    /// The banner's game: the one picked in the grid, or the game played last while the whole library is listed (not during a search)
     private var hero: Game? {
-        guard games.count == library.games.count else { return nil }
-        return library.games.filter { Stats.shared.of($0).last != nil }.max { (Stats.shared.of($0).last ?? .distantPast) < (Stats.shared.of($1).last ?? .distantPast) }
+        if let p = picked, let g = games.first(where: { $0.id == p }) { return g }
+        return games.count == library.games.count ? last : nil
     }
     var body: some View {
         let _ = covers.version
@@ -271,8 +278,9 @@ struct HomeGrid: View {
                     }
                     .padding(.top, 6)
                     if let h = hero {
-                        HeroBanner(game: h, playing: library.running.contains(h.id), open: { selection = h.id }, play: { library.play(h) })
+                        HeroBanner(game: h, playing: library.running.contains(h.id), continuing: h.id == last?.id, open: { selection = h.id }, play: { library.play(h) })
                             .contextMenu { GameMenu(game: h) }
+                            .id(h.id).transition(.opacity.combined(with: .scale(scale: 0.98)))
                     }
                     if games.isEmpty {
                         ContentUnavailableView("No games found", systemImage: "magnifyingglass", description: Text("Nothing in the library matches the search."))
@@ -281,7 +289,8 @@ struct HomeGrid: View {
                         Text(hero == nil ? "GAMES" : "YOUR LIBRARY").font(.caption.weight(.heavy)).tracking(2).foregroundStyle(.secondary)
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 22)], spacing: 26) {
                             ForEach(games) { g in
-                                GameCard(game: g, playing: library.running.contains(g.id), open: { selection = g.id }, play: { library.play(g) })
+                                GameCard(game: g, playing: library.running.contains(g.id), picked: g.id == picked,
+                                         open: { withAnimation(.easeInOut(duration: 0.35)) { picked = g.id } }, play: { library.play(g) })
                                     .contextMenu { GameMenu(game: g) }
                             }
                         }

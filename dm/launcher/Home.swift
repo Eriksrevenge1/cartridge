@@ -80,10 +80,11 @@ struct Wordmark: View {
     }
 }
 
-/// The game played last, large: its art, how long it has been played, and Continue
+/// The banner's game, large: its art, how long it has been played, Play and its page
 struct HeroBanner: View {
     let game: Game
     let playing: Bool
+    var continuing = true
     var open: () -> Void
     var play: () -> Void
     @State private var hover = false
@@ -94,7 +95,7 @@ struct HeroBanner: View {
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 22, y: 12)
             VStack(alignment: .leading, spacing: 10) {
-                Text(playing ? "NOW PLAYING" : "CONTINUE PLAYING").font(.caption.weight(.heavy)).tracking(2).foregroundStyle(.secondary)
+                Text(playing ? "NOW PLAYING" : continuing ? "CONTINUE PLAYING" : Stats.shared.of(game).last == nil ? "START PLAYING" : "PLAY AGAIN").font(.caption.weight(.heavy)).tracking(2).foregroundStyle(.secondary)
                 HStack(spacing: 8) {
                     Text(game.title).font(.system(size: 30, weight: .bold, design: .rounded)).lineLimit(2)
                     if game.isSwitch2 { Switch2Badge() }
