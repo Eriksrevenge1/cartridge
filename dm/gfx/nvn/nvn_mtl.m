@@ -20169,7 +20169,6 @@ static CAFrameRateRange link_range(int mode) {
 // both machines, for one more frame of input lag in variable-refresh fullscreen only. Fixed-rate screens do not need this workaround (#822). Why the system misses at 16 ms,
 // and why a fixed-rate screen still has about 20 ms more presentation delay with the link at either latency, remain open (docs/reference/frame-rate.md)
 __attribute__((weak)) int front_fullscreen(void) { return 0; }   // front_mac.m; graphics unit tests and iOS have none
-__attribute__((weak)) int front_screen_settling(void) { return 0; }   // front_mac.m: fullscreen asked for at launch and not entered yet, or a screen mode switched under 1 s ago
 __attribute__((weak)) int front_screen_variable_refresh(void) { return 0; }   // front_mac.m; graphics unit tests and iOS have none
 // Latency 2 also while the automatic 60 Hz link shows the late frames of a 30 fps cap at the next vsync (hle_nvn.c fstep_tick, mtl_set_fstep_fine): at latency 1 it calls back
 // 16.5 ms before the target time and takes a frame whose GPU work is still running, so on a ProMotion screen the present lands one 120 Hz refresh late and the link skips its next
