@@ -51,9 +51,9 @@ struct LauncherApp: App {
             DevicesView().environmentObject(devices).environmentObject(library).frame(minWidth: 780, minHeight: 480)
                 .onAppear { devices.builder = builder }
         }
-        MenuBarExtra("Cartridge", systemImage: "gamecontroller.fill", isInserted: $menuBar) {
+        MenuBarExtra(isInserted: $menuBar) {
             MenuBarMenu().environmentObject(library)
-        }
+        } label: { Image(nsImage: LogoTemplate.image).accessibilityLabel("Cartridge") }
         Settings {
             TabView {
                 FoldersView().environmentObject(library).tabItem { Label("Library", systemImage: "books.vertical") }

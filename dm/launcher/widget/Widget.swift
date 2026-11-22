@@ -37,7 +37,7 @@ struct Cover: View {
     let g: RecentGame
     var body: some View {
         if let i = Shared.cover(g.titleID) { Image(nsImage: i).resizable().aspectRatio(contentMode: .fill) }
-        else { Rectangle().fill(.gray.opacity(0.3)).overlay(Image(systemName: "gamecontroller.fill").foregroundStyle(.secondary)) }
+        else { Rectangle().fill(.gray.opacity(0.3)).overlay(LogoMark(left: Brand.cyan, right: Brand.red, size: 40)) }
     }
 }
 
@@ -46,7 +46,7 @@ struct WidgetView: View {
     @Environment(\.widgetFamily) private var family
     var body: some View {
         if entry.games.isEmpty {
-            VStack(spacing: 6) { Image(systemName: "gamecontroller.fill").font(.title); Text("Play a game in Cartridge").font(.caption).multilineTextAlignment(.center) }
+            VStack(spacing: 6) { LogoMark(left: Brand.cyan, right: Brand.red, size: 44); Text("Play a game in Cartridge").font(.caption).multilineTextAlignment(.center) }
                 .foregroundStyle(.secondary)
         } else if family == .systemSmall, let g = entry.games.first {
             ZStack(alignment: .bottomLeading) {

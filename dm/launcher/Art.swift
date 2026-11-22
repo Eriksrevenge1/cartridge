@@ -58,7 +58,7 @@ final class Covers: ObservableObject {
             try? FileManager.default.createDirectory(at: g.support, withIntermediateDirectories: true)
             try? png.write(to: dst)
         } else if src == nil { try? FileManager.default.removeItem(at: dst) }
-        cache[g.id] = nil; accents[g.id] = nil; version += 1
+        cache[g.id] = nil; accents[g.id] = nil; pairs[g.id] = nil; version += 1
         RecentFile.write(Library.shared.games)
     }
     func hasCustom(_ g: Game) -> Bool { FileManager.default.fileExists(atPath: Covers.custom(g).path) }
@@ -82,6 +82,46 @@ final class Covers: ObservableObject {
         return a.map { Color(nsColor: $0) }
     }
     private var accents: [String: NSColor?] = [:]
+    /// The logo's colours on this game's page (neonPair), the icon's cyan | red for grey art
+    func pair(_ g: Game) -> (Color, Color) {
+        if let p = pairs[g.id] { return p.map { (Color(nsColor: $0.0), Color(nsColor: $0.1)) } ?? (Brand.cyan, Brand.red) }
+        let p = Covers.neonPair(of: image(g)); pairs[g.id] = .some(p)
+        return p.map { (Color(nsColor: $0.0), Color(nsColor: $0.1)) } ?? (Brand.cyan, Brand.red)
+    }
+    private var pairs: [String: (NSColor, NSColor)?] = [:]
+
+    /// The logo's two neon colours for this art (left and right of the cartridge, as the icon's cyan | red): the art's two heaviest vivid hues at least 60° apart,
+    /// made bright; the second, when the art has only one, the first turned 150° round the wheel. nil for grey art (the icon's own colours then)
+    static func neonPair(of img: NSImage) -> (NSColor, NSColor)? {
+        let n = 48
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: n, pixelsHigh: n, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: n * 4, bitsPerPixel: 32),
+              let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = ctx
+        img.draw(in: NSRect(x: 0, y: 0, width: n, height: n), from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let px = rep.bitmapData else { return nil }
+        var weight = [Double](repeating: 0, count: 36), hue = [Double](repeating: 0, count: 36), total = 0.0
+        for i in 0..<(n * n) {
+            let c = NSColor(deviceRed: CGFloat(px[i * 4]) / 255, green: CGFloat(px[i * 4 + 1]) / 255, blue: CGFloat(px[i * 4 + 2]) / 255, alpha: 1)
+            guard px[i * 4 + 3] > 127 else { continue }
+            total += 1
+            let w = c.saturationComponent * c.brightnessComponent * (c.brightnessComponent > 0.15 ? 1 : 0)
+            guard w > 0.08 else { continue }
+            let k = min(35, Int(c.hueComponent * 36)); weight[k] += w; hue[k] += c.hueComponent * w
+        }
+        func near(_ k: Int) -> Double { weight[(k + 35) % 36] + weight[k] + weight[(k + 1) % 36] }
+        let order = (0..<36).sorted { near($0) > near($1) }
+        guard total > 0, let a = order.first, near(a) / total > 0.03 else { return nil }
+        let ha = hue[a] / max(weight[a], 1e-9)
+        let neon = { (h: Double) in NSColor(deviceHue: CGFloat(h.truncatingRemainder(dividingBy: 1) + (h < 0 ? 1 : 0)), saturation: 0.82, brightness: 1, alpha: 1) }
+        let apart = { (k: Int) -> Bool in let d = abs(k - a) % 36; return min(d, 36 - d) >= 6 }
+        if let b = order.first(where: { apart($0) && near($0) / total > 0.015 && weight[$0] > 0 }) {
+            let hb = hue[b] / max(weight[b], 1e-9)
+            return ha <= hb ? (neon(ha), neon(hb)) : (neon(hb), neon(ha))   // cooler hue on the left, as the icon's cyan
+        }
+        return (neon(ha), neon(ha + 150.0 / 360))
+    }
 
     /// The art's most present vivid hue: the image at 48×48, each pixel weighted by its saturation times its brightness (greys and near-black count for nothing), hues in
     /// 10° buckets, the heaviest bucket (with its neighbours) averaged. Then made dark enough for white text on it (a Play button), at least 3:1 against white (large text and controls), and kept vivid
@@ -171,8 +211,10 @@ struct GameCard: View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
                 Color.clear.aspectRatio(1, contentMode: .fit)
-                    .overlay(CoverArt(game: game))
+                    .overlay(CoverArt(game: game).scaleEffect(hover ? 1.09 : 1)
+                        .animation(hover ? .easeOut(duration: 6) : .easeOut(duration: 0.5), value: hover))   // a slow push in while the pointer rests on it
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(hover ? AnyShapeStyle(LinearGradient(gradient: Brand.split, startPoint: .leading, endPoint: .trailing)) : AnyShapeStyle(Color.white.opacity(0.12)), lineWidth: hover ? 1.5 : 1))
                 if hover || playing {
                     Button(action: play) {
                         Label(playing ? "Playing" : "Play", systemImage: playing ? "gamecontroller.fill" : "play.fill").font(.callout.bold())
@@ -201,27 +243,53 @@ struct GameCard: View {
 
 enum LibrarySort: String, CaseIterable, Identifiable { case recent = "Recently Played", name = "Name", time = "Most Played"; var id: String { rawValue } }
 
-/// The library's home: every game as a card, filtered by the search and sorted
+/// The library's home: the backdrop, the wordmark, the game played last, and every game as a card, filtered by the search and sorted
 struct HomeGrid: View {
     let games: [Game]
     @Binding var selection: String?
     @EnvironmentObject var library: Library
     @EnvironmentObject var builder: Builder
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.controlActiveState) private var active
+    @ObservedObject private var covers = Covers.shared
+    /// The game played last, shown large while the whole library is listed (not during a search)
+    private var hero: Game? {
+        guard games.count == library.games.count else { return nil }
+        return library.games.filter { Stats.shared.of($0).last != nil }.max { (Stats.shared.of($0).last ?? .distantPast) < (Stats.shared.of($1).last ?? .distantPast) }
+    }
     var body: some View {
+        let _ = covers.version
+        let byRecent = library.games.sorted { (Stats.shared.of($0).last ?? .distantPast) > (Stats.shared.of($1).last ?? .distantPast) }
+        let lit = hero ?? byRecent.first
+        let pair = lit.map { covers.pair($0) } ?? (Brand.cyan, Brand.red)
         ScrollView {
-            if games.isEmpty {
-                ContentUnavailableView("No games found", systemImage: "magnifyingglass", description: Text("Nothing in the library matches the search."))
-                    .padding(.top, 80)
-            }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 22)], spacing: 26) {
-                ForEach(games) { g in
-                    GameCard(game: g, playing: library.running.contains(g.id), open: { selection = g.id }, play: { library.play(g) })
-                        .contextMenu { GameMenu(game: g) }
+                VStack(alignment: .leading, spacing: 26) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Wordmark(left: pair.0, right: pair.1)
+                        Spacer()
+                        Text(library.games.count == 1 ? "1 game" : "\(library.games.count) games").font(.callout.weight(.semibold)).foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 6)
+                    if let h = hero {
+                        HeroBanner(game: h, playing: library.running.contains(h.id), open: { selection = h.id }, play: { library.play(h) })
+                            .contextMenu { GameMenu(game: h) }
+                    }
+                    if games.isEmpty {
+                        ContentUnavailableView("No games found", systemImage: "magnifyingglass", description: Text("Nothing in the library matches the search."))
+                            .frame(maxWidth: .infinity).padding(.top, 40)
+                    } else {
+                        Text(hero == nil ? "GAMES" : "YOUR LIBRARY").font(.caption.weight(.heavy)).tracking(2).foregroundStyle(.secondary)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 22)], spacing: 26) {
+                            ForEach(games) { g in
+                                GameCard(game: g, playing: library.running.contains(g.id), open: { selection = g.id }, play: { library.play(g) })
+                                    .contextMenu { GameMenu(game: g) }
+                            }
+                        }
+                    }
                 }
-            }
-            .padding(24)
+                .padding(28)
         }
+        .background { HomeBackdrop(hero: lit, moving: active != .inactive && library.running.isEmpty, left: pair.0, right: pair.1) }
     }
 }
 
@@ -283,6 +351,8 @@ struct GameHeader<Actions: View>: View {
                 .overlay(LinearGradient(colors: [.clear, Color(nsColor: .windowBackgroundColor).opacity(0.65), Color(nsColor: .windowBackgroundColor)],
                                         startPoint: .init(x: 0.5, y: 0.25), endPoint: .bottom))
                 .overlay(dropping ? RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 3).padding(4) : nil)
+            Wordmark(left: Covers.shared.pair(game).0, right: Covers.shared.pair(game).1, size: 15)
+                .padding(.leading, 22).padding(.top, 16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             HStack(alignment: .bottom, spacing: 16) {
                 Color.clear.frame(width: 150, height: 150).overlay(CoverArt(game: game))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous)).shadow(color: .black.opacity(0.4), radius: 12, y: 6)

@@ -36,7 +36,9 @@ def run(cmd):
 
 def icon(res, t):   # the app icon, drawn by dm/launcher/icon.swift
     iconset = Path(t) / 'AppIcon.iconset'
-    run(['xcrun', 'swift', ROOT / 'dm/launcher/icon.swift', iconset])
+    script = Path(t) / 'icon.swift'   # the logo (Logo.swift) and the tile around it, as one script
+    script.write_text((ROOT / 'dm/launcher/Logo.swift').read_text() + '\n' + (ROOT / 'dm/launcher/icon.swift').read_text())
+    run(['xcrun', 'swift', script, iconset])
     run(['iconutil', '-c', 'icns', '-o', res / 'AppIcon.icns', iconset])
 
 
@@ -52,7 +54,7 @@ def widget(stage, t, swiftc, sdk, minos, identity):
     (appex / 'Contents/MacOS').mkdir(parents=True)
     run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-wmo', '-swift-version', '5', '-parse-as-library', '-application-extension',
          '-module-name', 'CartridgeWidget', '-module-cache-path', Path(t) / 'module-cache', '-o', appex / 'Contents/MacOS/CartridgeWidget',
-         *sorted((ROOT / 'dm/launcher/widget').glob('*.swift')), '-framework', 'SwiftUI', '-framework', 'WidgetKit'])
+         *sorted((ROOT / 'dm/launcher/widget').glob('*.swift')), ROOT / 'dm/launcher/Logo.swift', '-framework', 'SwiftUI', '-framework', 'WidgetKit'])
     with open(appex / 'Contents/Info.plist', 'wb') as f:
         plistlib.dump({
             'CFBundleName': 'CartridgeWidget', 'CFBundleDisplayName': NAME, 'CFBundleIdentifier': f'{BUNDLE_ID}.widget', 'CFBundleExecutable': 'CartridgeWidget',

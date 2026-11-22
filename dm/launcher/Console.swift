@@ -84,7 +84,7 @@ struct ConsoleView: View {
 
     private var topBar: some View {
         HStack {
-            Label("Cartridge", systemImage: "gamecontroller.fill").font(.title3.bold()).foregroundStyle(.white.opacity(0.85))
+            Wordmark(size: 18).environment(\.colorScheme, .dark)
             Spacer()
             TimelineView(.periodic(from: .now, by: 15)) { t in
                 Text(t.date, style: .time).font(.title3.monospacedDigit()).foregroundStyle(.white.opacity(0.85))
