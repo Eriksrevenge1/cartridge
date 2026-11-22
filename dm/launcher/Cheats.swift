@@ -91,6 +91,27 @@ final class CheatsModel: ObservableObject {
         cheats[i].on = on; writeEnabled()
     }
     func setAll(_ on: Bool) { for i in cheats.indices { cheats[i].on = on }; writeEnabled() }
+    /// Removes cheats from the cheat file: each one's [Name] header and its code lines. The others keep their on/off state, matched in order (a removed earlier entry of a
+    /// repeated name renumbers the later ones' "Name #2" keys)
+    func remove(_ gone: [Cheat]) {
+        guard let f = file, let text = try? String(contentsOf: f, encoding: .utf8), !gone.isEmpty else { return }
+        let drop = Set(gone.map(\.key)), keepOn = cheats.filter { !drop.contains($0.key) }.map(\.on)
+        var seen: [String: Int] = [:], skipping = false, out: [Substring] = []
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let l = raw.trimmingCharacters(in: .whitespaces)
+            if let open = l.first, open == "[" || open == "{", let end = l.firstIndex(of: open == "[" ? "]" : "}") {
+                var n = String(l[l.index(after: l.startIndex)..<end]); while n.utf8.count > 127 { n.removeLast() }
+                let dup = seen[n, default: 0]; seen[n] = dup + 1
+                skipping = open == "[" && drop.contains(dup == 0 ? n : "\(n) #\(dup + 1)")
+            }
+            if !skipping { out.append(raw) }
+        }
+        do { try out.joined(separator: "\n").write(to: f, atomically: true, encoding: .utf8) } catch { message = error.localizedDescription; return }
+        reload()
+        for (i, on) in zip(cheats.indices, keepOn) { cheats[i].on = on }
+        writeEnabled()
+        message = gone.count == 1 ? "Removed \(gone[0].name)." : "Removed \(gone.count) cheats."
+    }
     func writeEnabledPublic() { writeEnabled() }
     private func writeEnabled() {
         guard let f = enabledFile else { return }
@@ -133,6 +154,7 @@ struct CheatsView: View {
 
     @State private var choosing = false
     @State private var advanced = false
+    @State private var confirmRemoveAll = false
 
     var body: some View {
         Form {
@@ -153,6 +175,7 @@ struct CheatsView: View {
                         Spacer()
                         Button("All On") { m.setAll(true) }
                         Button("All Off") { m.setAll(false) }
+                        Button("Remove All…") { confirmRemoveAll = true }
                     }
                 }
             }
@@ -161,7 +184,11 @@ struct CheatsView: View {
                 if !rows.isEmpty {
                     Section(s.isEmpty ? "" : s) {
                         ForEach(rows) { c in
-                            Toggle(c.name, isOn: Binding(get: { c.on }, set: { m.set(c, on: $0) }))
+                            HStack {
+                                Toggle(c.name, isOn: Binding(get: { c.on }, set: { m.set(c, on: $0) }))
+                                Button { m.remove([c]) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("Remove this cheat")
+                            }
+                            .contextMenu { Button("Remove") { m.remove([c]) } }
                         }
                     }
                     .disabled(m.masterOff)
@@ -187,6 +214,9 @@ struct CheatsView: View {
                 Text(CheatsModel.dbCredit).font(.footnote).foregroundStyle(.secondary)
             }
         }
+        .confirmationDialog("Remove all cheats for this game?", isPresented: $confirmRemoveAll) {
+            Button("Remove All", role: .destructive) { m.remove(m.cheats) }
+        } message: { Text("You can find them again with Find Cheats…") }
         .formStyle(.grouped)
         .sheet(isPresented: $choosing) { ChooseCheatsSheet(m: m) }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
