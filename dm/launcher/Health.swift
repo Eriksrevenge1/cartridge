@@ -42,14 +42,20 @@ enum Health {
                     .split(separator: "\t").dropFirst().first.map(String.init)
             }
             if let builtShared = info?["DMEngineSharedHash"] as? String, let nowShared = read("ENGINE_SHAREDHASH") {
-                let schemes: [(shared: String, profiles: String?)] = [(nowShared, read("ENGINE_PROFILEHASHES"))] + (read("ENGINE_SHAREDHASH.v1").map { [($0, read("ENGINE_PROFILEHASHES.v1"))] } ?? [])
-                guard let scheme = schemes.first(where: { $0.shared == builtShared }) else {
+                // scheme 3 (current) and 2 share the shared fingerprint and differ in the profile tables (3 leaves out the harness's smoke / bench / validated files);
+                // a profile matching any scheme of the same shared fingerprint is up to date
+                let schemes: [(shared: String, profiles: String?)] = [(nowShared, read("ENGINE_PROFILEHASHES")), (nowShared, read("ENGINE_PROFILEHASHES.v2"))]
+                    + (read("ENGINE_SHAREDHASH.v1").map { [($0, read("ENGINE_PROFILEHASHES.v1"))] } ?? [])
+                let matching = schemes.filter { $0.shared == builtShared }
+                if matching.isEmpty {
                     out.append(HealthFinding(level: .info, text: "An update to nxnative reaches every game (\(c)): Rebuild to update."))
                     return out
                 }
-                if let prof = info?["DMProfile"] as? String, let builtProf = info?["DMProfileHash"] as? String,
-                   let now = profileHash(scheme.profiles, prof), now != builtProf {
-                    out.append(HealthFinding(level: .info, text: "An update changed this game's profile (\(c)): Rebuild to update."))
+                if let prof = info?["DMProfile"] as? String, let builtProf = info?["DMProfileHash"] as? String {
+                    let nows = matching.compactMap { profileHash($0.profiles, prof) }
+                    if !nows.isEmpty && !nows.contains(builtProf) {
+                        out.append(HealthFinding(level: .info, text: "An update changed this game's profile (\(c)): Rebuild to update."))
+                    }
                 }
                 return out
             }
