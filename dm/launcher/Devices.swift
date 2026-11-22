@@ -90,6 +90,37 @@ final class Devices: ObservableObject {
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in self?.refresh() }
     }
+    // ---- Your games on this iPhone (library sync): which of the library's games the device has, and whether Cartridge's copy there is older than the Mac's ----
+    /// The apps on the chosen device: bundle ID → its version (devicectl device info apps)
+    @Published var onDevice: [String: String] = [:]
+    /// Games whose iPhone build is under way for a device: title ID → device UDID. The IPA that build makes is installed there when it lands (add(ipa:))
+    @Published var pending: [String: String] = [:]
+    /// What Cartridge installed: "<UDID>|<bundle ID>" → the IPA's DMCommit (the engine it was built with)
+    var installedCommits: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: "install.commits") as? [String: String] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "install.commits") }
+    }
+    func readApps(_ udid: String) {
+        DispatchQueue.global().async {
+            let f = FileManager.default.temporaryDirectory.appendingPathComponent("nxl-apps-\(UUID().uuidString).json")
+            defer { try? FileManager.default.removeItem(at: f) }
+            shell("/usr/bin/xcrun", ["devicectl", "device", "info", "apps", "--device", udid, "--json-output", f.path, "--quiet"])
+            guard let d = try? Data(contentsOf: f), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let apps = (o["result"] as? [String: Any])?["apps"] as? [[String: Any]] else { return }
+            var found: [String: String] = [:]
+            for a in apps { if let b = a["bundleIdentifier"] as? String, b.hasPrefix("org.nxnative.") { found[b] = (a["version"] as? String) ?? (a["bundleVersion"] as? String) ?? "" } }
+            DispatchQueue.main.async { if found != self.onDevice { self.onDevice = found } }
+        }
+    }
+    enum PhoneState { case absent, current, older, outside }
+    /// A library game's state on a device: not there; there from Cartridge with the Mac app's engine (current) or another (older); or there, not installed by Cartridge
+    func state(of g: Game, on udid: String) -> PhoneState {
+        guard onDevice[g.bundleID] != nil else { return .absent }
+        guard let theirs = installedCommits["\(udid)|\(g.bundleID)"] else { return .outside }
+        let mine = NSDictionary(contentsOf: g.contents.appendingPathComponent("Info.plist"))?["DMCommit"] as? String
+        return mine == nil || theirs == mine ? .current : .older
+    }
+
     func refresh() {
         DispatchQueue.global().async {
             let f = FileManager.default.temporaryDirectory.appendingPathComponent("nxl-devices-\(UUID().uuidString).json")
@@ -121,6 +152,22 @@ final class Devices: ObservableObject {
         let item = IPAItem(path: ipa.path, bundleID: info["CFBundleIdentifier"] as? String ?? "", name: info["CFBundleDisplayName"] as? String ?? info["CFBundleName"] as? String ?? ipa.lastPathComponent,
                            titleID: titleID ?? (info["DMTitleID"] as? String ?? ""), source: source, romfsSeparate: romfsSeparate || (info["DMRomfsSeparate"] as? Bool ?? false))
         ipas.removeAll { $0.path == item.path }; ipas.insert(item, at: 0); persist()
+        // an iPhone build asked for by Update on iPhone: installed on its device now that it is here
+        let tid = item.titleID.uppercased()
+        if let udid = pending[tid] {
+            pending[tid] = nil
+            if let d = devices.first(where: { $0.udid == udid }) { install(item, on: d, pushFiles: true) }
+            else { say("\(item.name) is built for iPhone; connect the device and press Install.") }
+        }
+    }
+    /// Update on iPhone: the game's iPhone build from its known source, installed on the device when it lands
+    func update(_ g: Game, on d: Device) -> Bool {
+        guard let builder, var r = builder.rebuildRequest(for: g) else { say("[RED] \(g.name): its files were not found; rebuild it once from its page."); return false }
+        r.target = .ios; r.outFolder = nil
+        pending[g.titleID.uppercased()] = d.udid
+        builder.enqueue(r)
+        say("Building \(g.name) for iPhone; it is installed on \(d.name) when the build finishes.")
+        return true
     }
     func remove(_ i: IPAItem) { ipas.removeAll { $0 == i }; persist() }
 
@@ -188,6 +235,8 @@ final class Devices: ObservableObject {
             throw Failure("The install failed: \(out.split(separator: "\n").suffix(4).joined(separator: "\n"))")
         }
         say("✓ Installed \(ipa.name). The first start may ask you to trust your developer certificate: Settings › General › VPN & Device Management.")
+        let commit = info["DMCommit"] as? String ?? ""
+        DispatchQueue.main.async { self.installedCommits["\(d.udid)|\(ipa.bundleID)"] = commit; self.readApps(d.udid) }
 
         if pushFiles, ipa.romfsSeparate, let files = gameFiles(ipa) {
             say("Copying the game files (\(files.lastPathComponent))…")
@@ -257,6 +306,7 @@ final class Devices: ObservableObject {
 
 struct DevicesView: View {
     @EnvironmentObject var devices: Devices
+    @EnvironmentObject var library: Library
     @State private var device: String?
     @State private var ipa: String?
     @State private var pushFiles = true
@@ -272,6 +322,29 @@ struct DevicesView: View {
                         ForEach(devices.devices) { Text("\($0.name) · \($0.model) · iOS \($0.os) · \($0.transport)").tag(Optional($0.udid)) }
                     }
                     .disabled(devices.devices.isEmpty)
+                }
+                if let d = devices.devices.first(where: { $0.udid == device }) {
+                    Section("Your games on this \(d.model.lowercased().contains("ipad") ? "iPad" : "iPhone")") {
+                        ForEach(library.games) { g in
+                            let st = devices.state(of: g, on: d.udid)
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(g.name)
+                                    Text(devices.pending[g.titleID.uppercased()] != nil ? "Building for iPhone…"
+                                         : st == .absent ? "Not on this device" : st == .current ? "Up to date" : st == .older ? "Older than the Mac's: update it" : "On this device (installed another way)")
+                                        .font(.footnote).foregroundStyle(st == .older ? .orange : .secondary)
+                                }
+                                Spacer()
+                                if st != .current && devices.pending[g.titleID.uppercased()] == nil {
+                                    Button(st == .absent ? "Install" : "Update") { _ = devices.update(g, on: d) }
+                                        .disabled(devices.busy || devices.team.count != 10)
+                                }
+                            }
+                        }
+                        Button("Check Again") { devices.readApps(d.udid) }
+                        Text("An update builds the game for iPhone from its files and installs it. Saves carry over through Cloud saves (Settings), not through installing.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Section("App") {
                     Picker("IPA", selection: $ipa) {
@@ -325,6 +398,7 @@ struct DevicesView: View {
         }
         .onDisappear { devices.watch(false) }
         .onChange(of: devices.devices) { if device == nil || !devices.devices.contains(where: { $0.udid == device }) { device = devices.devices.first?.udid } }
+        .onChange(of: device) { if let device { devices.readApps(device) } }
         .onDrop(of: [.fileURL], isTargeted: nil) { ps in
             for p in ps { _ = p.loadObject(ofClass: URL.self) { u, _ in if let u, u.pathExtension == "ipa" { DispatchQueue.main.async { devices.add(ipa: u); ipa = devices.ipas.first?.id } } } }
             return true

@@ -48,7 +48,7 @@ struct LauncherApp: App {
                 .onAppear { builder.library = library; builder.devices = devices; devices.builder = builder }
         }
         Window("Install on iPhone or iPad", id: "devices") {
-            DevicesView().environmentObject(devices).frame(minWidth: 780, minHeight: 480)
+            DevicesView().environmentObject(devices).environmentObject(library).frame(minWidth: 780, minHeight: 480)
                 .onAppear { devices.builder = builder }
         }
         MenuBarExtra("Cartridge", systemImage: "gamecontroller.fill", isInserted: $menuBar) {
