@@ -11,7 +11,7 @@ name: upstream-prs
 
 on:
   schedule:
-    - cron: '47 */6 * * *'   # every six hours: CI results and reviews come in through the day
+    - cron: '47 */2 * * *'   # every two hours: conflicts and red checks are fixed before the owner has to ask
   workflow_dispatch:
 
 permissions:
@@ -118,6 +118,10 @@ jobs:
                same way on main's tree); rebase a branch that no longer applies on upstream/main, regenerating dmsh_chain.h and the symptom index where needed, and
                rebase the rows whose `base` is it on top. Run the checks, push with `--force-with-lease`, and say on the pull request what changed in one line.
                Failures upstream's main has too are not ours: leave them.
+               When upstream has since landed its own, narrower version of what a branch does (the same rule for fewer cases, a function the branch
+               generalises), keep the branch's version where it covers every case upstream's does, update what still names upstream's (comments,
+               docs), and say so on the pull request in one line; that is not a conflict that changes what the change does. Escalate only when the two
+               disagree on a case both cover.
             3. Send: take the first row with status `pending` whose `base` is `-` or a row that is `landed` (none whose base is still pending or forwarded). Rebase
                its branch on upstream/main (`git rebase upstream/main`, resolving conflicts so the change still does what its commit says), regenerate what
                upstream's rules ask (`dmsh_chain.py --header` after a chain change, `docs_symptoms.py` after docs/reference changes), run the checks, push it to
