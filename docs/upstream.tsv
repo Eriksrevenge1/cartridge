@@ -30,4 +30,4 @@ follow-upstream	.github/workflows/follow-upstream.yml, upstream-prs.yml and thei
 md-merge	dm/tools/md_merge.py and .gitattributes (the fork's Markdown merge driver)	fork-only (the fork following upstream)	-	-	6abe05e0
 notify-owner	.github/workflows/notify-owner.yml (the owner hears of new issues and pull requests)	fork-only (the fork's own issues)	-	-	-
 guess-switch2	games/profile_guess: Switch 2 games with virtual address memory get the pool limit, and 128 GB of alias region without a heap	forwarded seedds/nxnative#3188	pr/guess-switch2	-	fe7b2b97	a profile-less build of Xenoblade 2's Switch 2 Edition booted at 60 fps with it, crashed without; --check: XC2/XCDE/DK ok
-smoke-routes	games: boot smoke routes for Ocarina of Time, Donkey Kong Bananza, Welcome Tour and Xenoblade Chronicles 3	pending	pr/smoke-routes	-	ea97e5f6	the Xenoblade 2 / DE Switch 2 routes go with xc2-ns2 / xcde-ns2
+smoke-routes	games: boot smoke routes for Ocarina of Time, Donkey Kong Bananza, Welcome Tour and Xenoblade Chronicles 3	forwarded seedds/nxnative#3189	pr/smoke-routes	-	ea97e5f6	the Xenoblade 2 / DE Switch 2 routes go with xc2-ns2 / xcde-ns2
