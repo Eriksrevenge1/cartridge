@@ -31,7 +31,7 @@ static int arh1_open(const uint8_t *d, size_t n, arh1_t *a) {
     uint32_t so = arh1_u32(d + 12), sn = arh1_u32(d + 16), no = arh1_u32(d + 20), nn = arh1_u32(d + 24), fo = arh1_u32(d + 28), fn = arh1_u32(d + 32);
     uint32_t key = arh1_u32(d + 36) ^ 0xF3F35353u;
     if (so > n || sn > n - so || no > n || nn > n - no || nn % 8 || fo > n || fn > (n - fo) / ARH1_ENTRY || !nn) return -1;
-    a->strings = malloc(sn + 1); a->dict = malloc(nn);
+    a->strings = malloc(sn + 1); a->dict = malloc(nn);   // NOLINT(clang-analyzer-unix.Malloc): on success the caller owns both and frees them with arh1_free
     if (!a->strings || !a->dict) { arh1_free(a); return -1; }
     memcpy(a->strings, d + so, sn); a->strings[sn] = 0;   // a terminator past the end bounds every string scan
     for (uint32_t i = 0; i + 4 <= sn; i += 4) { uint32_t w = arh1_u32(a->strings + i) ^ key; memcpy(a->strings + i, &w, 4); }
@@ -43,7 +43,8 @@ static int arh1_open(const uint8_t *d, size_t n, arh1_t *a) {
 // The ID of the member at path ("/chr/pc/pc010101.wimdo"), or -1
 static int64_t arh1_find(const arh1_t *a, const char *path) {
     size_t len = strlen(path); uint32_t node = 0;
-    while (a->dict[2 * node] >= 0) {
+    if (!a->dict) return -1;   // no dictionary loaded
+    while (a->dict[2 * node] >= 0) {   // NOLINT(clang-analyzer-core.UndefinedBinaryOperatorResult): arh1_open fills every dictionary word (nn / 4 of them, nn a multiple of 8), and node < ndict
         if (!len) return -1;   // the path ends inside a directory
         uint8_t c = (uint8_t)*path; if (c > 0x7f) return -1;
         uint32_t next = (uint32_t)a->dict[2 * node] ^ c;

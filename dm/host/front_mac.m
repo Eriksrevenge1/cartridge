@@ -694,6 +694,7 @@ static void hq_changed(hq_phase was, hq_phase now, GCController *holder) {
 static void home_tap(void) {
     const char *e = getenv("DM_HOME_TAP"); if (e && !strcmp(e, "0")) return;
     NSURL *u = [NSURL URLWithString:[NSString stringWithFormat:@"cartridge://console?game=%016llX", (unsigned long long)DM_GAME_PROGRAM_ID]];
+    if (!u) return;
     if (![NSWorkspace.sharedWorkspace URLForApplicationToOpenURL:u]) { LOG("front end: Home tapped; Cartridge is not installed, nothing to open"); return; }
     LOG("front end: Home tapped, Cartridge's console mode comes forward (the game goes on)");
     if (g_mouse_captured) mouse_release();
@@ -1852,8 +1853,9 @@ void front_run(void (*guest)(void)) {
         [win center];
         // DM_SCREEN=<n or part of a name>: the screen the window opens on (and goes fullscreen on), by its index in NSScreen.screens or a case-insensitive part of its
         // localizedName. Unset, macOS places it, which for a process another one starts (scripts/bench.py) is the screen the user is working on, not the one asked for
-        if (getenv("DM_SCREEN") && *getenv("DM_SCREEN")) {
-            NSString *want = @(getenv("DM_SCREEN")); NSArray<NSScreen *> *all = NSScreen.screens; NSScreen *pick = nil;
+        const char *screen_env = getenv("DM_SCREEN");
+        if (screen_env && *screen_env) {
+            NSString *want = @(screen_env); NSArray<NSScreen *> *all = NSScreen.screens; NSScreen *pick = nil;
             NSInteger idx = want.integerValue; BOOL num = [want rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location == NSNotFound;
             if (num && idx >= 0 && idx < (NSInteger)all.count) pick = all[idx];
             for (NSScreen *s in all) if (!pick && [s.localizedName rangeOfString:want options:NSCaseInsensitiveSearch].location != NSNotFound) pick = s;

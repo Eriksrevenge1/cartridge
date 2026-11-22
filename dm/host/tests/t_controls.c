@@ -43,8 +43,11 @@ int main(void) {
     // Two files: the game's, read after the global one, changes only what it names
     char g[] = "/tmp/t_controls_gXXXXXX", p[] = "/tmp/t_controls_pXXXXXX";
     int fg = mkstemp(g), fp = mkstemp(p); FILE *f;
-    f = fdopen(fg, "w"); fputs("pad A=B\nkey 38=X\nmouse=right\nbogus line\n", f); fclose(f);
-    f = fdopen(fp, "w"); fputs("key 38=Y\r\nmouse_speed=3\n", f); fclose(f);
+    if (fg < 0 || fp < 0) { fprintf(stderr, "t_controls: cannot make temporary files\n"); return 1; }
+    if (!(f = fdopen(fg, "w"))) { fprintf(stderr, "t_controls: cannot open %s\n", g); return 1; }
+    fputs("pad A=B\nkey 38=X\nmouse=right\nbogus line\n", f); fclose(f);
+    if (!(f = fdopen(fp, "w"))) { fprintf(stderr, "t_controls: cannot open %s\n", p); return 1; }
+    fputs("key 38=Y\r\nmouse_speed=3\n", f); fclose(f);
     ctl_defaults(&c); nbad = 0;
     CHECK(ctl_load(&c, g, bad) == 1 && nbad == 1, "the global file: one line not understood");
     CHECK(ctl_load(&c, p, bad) == 0, "the game's file");

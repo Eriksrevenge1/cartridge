@@ -16,7 +16,9 @@ static int fails;
 
 static void put(const char *dir, const char *name, const void *d, size_t n) {
     char p[1200]; snprintf(p, sizeof p, "%s/%s", dir, name);
-    FILE *f = fopen(p, "wb"); fwrite(d, 1, n, f); fclose(f);
+    FILE *f = fopen(p, "wb");
+    if (!f) { fprintf(stderr, "t_fs_archive: cannot write %s\n", p); exit(1); }
+    fwrite(d, 1, n, f); fclose(f);
 }
 static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
 static void put64(uint8_t *p, uint64_t v) { memcpy(p, &v, 8); }
@@ -81,8 +83,8 @@ int main(void) {
         CHECK(arh1_find(&a, "/ab") == 0 && arh1_find(&a, "/cd") == 1 && arh1_find(&a, "/d/ef") == 2 && arh1_find(&a, "/d/g") == 3, "members found: %lld %lld %lld %lld", (long long)arh1_find(&a, "/ab"), (long long)arh1_find(&a, "/cd"), (long long)arh1_find(&a, "/d/ef"), (long long)arh1_find(&a, "/d/g"));
         CHECK(arh1_find(&a, "/a") < 0 && arh1_find(&a, "/abc") < 0 && arh1_find(&a, "/xb") < 0 && arh1_find(&a, "/d") < 0 && arh1_find(&a, "/d/e") < 0 && arh1_find(&a, "/d/") < 0 && arh1_find(&a, "/d/gg") < 0 && arh1_find(&a, "") < 0, "other paths are not members");
         arh1_free(&a);
-        uint8_t bad[64] = "arh2"; CHECK(arh1_open(bad, sizeof bad, &a) == -1, "not ARH1");
-        memcpy(bad, arh, 48); put32(bad + 28, 60); CHECK(arh1_open(bad, sizeof bad, &a) == -1, "a file table past the end is refused");
+        uint8_t bad[64] = "arh2"; CHECK(arh1_open(bad, sizeof bad, &a) == -1, "not ARH1"); arh1_free(&a);   // nothing to free when refused; a wrong success must not leak either
+        memcpy(bad, arh, 48); put32(bad + 28, 60); CHECK(arh1_open(bad, sizeof bad, &a) == -1, "a file table past the end is refused"); arh1_free(&a);
     }
 
     CHECK(mount("plain", base, 1) == RES_OK && mount("mod", base, 1) == RES_OK && mount("none", base, 1) == RES_OK, "mount the base three times");
@@ -121,7 +123,8 @@ int main(void) {
         unsetenv("DM_ROMFS_OVERLAY");
     }
 
-    char rm[1200]; snprintf(rm, sizeof rm, "rm -rf '%s'", root); if (system(rm)) fprintf(stderr, "t_fs_archive: %s left behind\n", root);
+    char rm[1200]; snprintf(rm, sizeof rm, "rm -rf '%s'", root);
+    if (system(rm)) fprintf(stderr, "t_fs_archive: %s left behind\n", root);   // NOLINT(bugprone-command-processor): the test removes its own temporary folder, a path it made with mkdtemp
     if (fails) { fprintf(stderr, "t_fs_archive: %d failed\n", fails); return 1; }
     printf("t_fs_archive: ok\n");
     return 0;
