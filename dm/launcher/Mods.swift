@@ -70,6 +70,23 @@ final class ModsModel: ObservableObject {
         mods.swapAt(i, i + d); save()
     }
 
+    /// A folder's subfolders, leaving out hidden ones and macOS's __MACOSX
+    static func subdirs(_ u: URL) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: u, includingPropertiesForKeys: [.isDirectoryKey])) ?? []).filter {
+            !$0.lastPathComponent.hasPrefix(".") && $0.lastPathComponent != "__MACOSX" && (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+    }
+    /// The folder that holds the mod: the first, breadth-first and at most 4 levels down, with romfs, exefs, atmosphere or contents in it (a download or a folder the
+    /// player chose often wraps it: "<mod>/<variant>/exefs/…" as emulators' add-on folders are shipped); none: the folder itself
+    static func modFolder(in src: URL) -> URL {
+        func marked(_ u: URL) -> Bool { subdirs(u).contains { ["romfs", "exefs", "atmosphere", "contents"].contains($0.lastPathComponent.lowercased()) } }
+        var level = [src]
+        for _ in 0..<4 {
+            if let u = level.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).first(where: marked) { return u }
+            level = level.flatMap(subdirs)
+            if level.isEmpty { break }
+        }
+        return src
+    }
     /// The folders in a mod download that hold the game's files and code patches: …/contents/<title ID>/romfs and exefs, …/<title ID>/…, …/romfs and …/exefs, or the folder
     /// itself; and the files of the game's DLCs, …/contents/<DLC's ID>/romfs, by the DLC's index (the low 12 bits of its ID)
     func romfsRoot(in src: URL) -> (URL, URL?, [Int: URL]) {
@@ -112,7 +129,7 @@ final class ModsModel: ObservableObject {
         if given == nil, name == tidFolderName(src) { name = src.deletingLastPathComponent().lastPathComponent }
         var dest = game.modsFolder.appendingPathComponent(name), n = 2
         while fm.fileExists(atPath: dest.path) { dest = game.modsFolder.appendingPathComponent("\(name) \(n)"); n += 1 }
-        let (romfs, exefs, aoc) = romfsRoot(in: src)
+        let (romfs, exefs, aoc) = romfsRoot(in: Self.modFolder(in: src))
         do {
             try fm.createDirectory(at: dest, withIntermediateDirectories: true)
             if fm.fileExists(atPath: romfs.path) { try fm.copyItem(at: romfs, to: dest.appendingPathComponent("romfs")) }

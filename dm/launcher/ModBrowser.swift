@@ -178,20 +178,9 @@ struct GBDetail {
                 }
             }.value
             guard code == 0 else { status = "Could not unpack \(f.name)\(ext == "rar" ? " (some newer RAR files cannot be opened on a Mac)" : ""): \(msg.split(separator: "\n").last ?? "")."; return }
-            // the folder that holds the mod: the first, breadth-first, with romfs, exefs, atmosphere or contents in it; else past wrapping folders (loose readme files and
-            // macOS's __MACOSX beside them do not count), so that a download of the game's files as they are is taken whole
-            func subdirs(_ u: URL) -> [URL] {
-                ((try? fm.contentsOfDirectory(at: u, includingPropertiesForKeys: [.isDirectoryKey])) ?? []).filter {
-                    !$0.lastPathComponent.hasPrefix(".") && $0.lastPathComponent != "__MACOSX" && (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            }
-            func marked(_ u: URL) -> Bool { subdirs(u).contains { ["romfs", "exefs", "atmosphere", "contents"].contains($0.lastPathComponent.lowercased()) } }
-            var src = out, level = [out]
-            search: for _ in 0..<4 {
-                for u in level where marked(u) { src = u; break search }
-                level = level.flatMap(subdirs)
-                if level.isEmpty { break }
-            }
-            if src == out { while subdirs(src).count == 1, !marked(src) { src = subdirs(src)[0] } }
+            // the folder that holds the mod (ModsModel.modFolder); none marked: past wrapping folders, so that a download of the game's files as they are is taken whole
+            var src = ModsModel.modFolder(in: out)
+            if src == out { while ModsModel.subdirs(src).count == 1 { src = ModsModel.subdirs(src)[0] } }
             if let why = ModRules.refused(files: out) { status = "Not installed: this mod \(why == "replaces the game's code" ? "replaces the game's code" : "contains \(why)")."; return }
             let credit = "\(d.mod.name)\n\(d.mod.page?.absoluteString ?? "")\nby \(d.authors.joined(separator: ", "))\nDownloaded by Cartridge from GameBanana (\(f.name)).\n"
             let name = d.files.count > 1 ? "\(d.mod.name) – \(f.name.split(separator: ".").first ?? "")" : d.mod.name
