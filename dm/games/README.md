@@ -90,6 +90,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [Diablo II: Resurrected](0100726014352000/README.md) | `0100726014352000` | 1.0.34.0 | 11.4.3 | Blizzard's D2R engine, FMOD | NVN | [60 fps mode](0100726014352000/README.md#what-it-needs) |
 | [Diablo III: Eternal Collection](01001B300B9BE000/README.md) | `01001B300B9BE000` | 2.7.7.92380 | 8.2.0 | Blizzard's engine, FMOD | NVN | — |
 | [Digimon Story Cyber Sleuth: Complete Edition](010014E00DB56000/README.md) | `010014E00DB56000` | 1.0.3 | 6.4.0 | Media.Vision MVGL | OpenGL | — |
+| [Digimon Story Time Stranger](010062E01FE0C000/README.md) | `010062E01FE0C000` | 1.2.2 | 20.5.21 | Media.Vision MVGL | NVN | — |
 | [Divinity: Original Sin 2 - Definitive Edition](010027400CDC6000/README.md) | `010027400CDC6000` | 1.0.12 | 9.3.0 | Larian's engine, Wwise | NVN | 60 fps target |
 | [Donkey Kong Bananza](040074A01BF12000/README.md) | `040074A01BF12000` | v458752 (Switch 2) | 20.5.19 (Ounce) | Nintendo EPD (sead / agl / gsys) | NVN2 | — |
 | [Splatoon Raiders](0400380020056000/README.md) | `0400380020056000` | v65536 (Switch 2) | 21.4.4 (Ounce) | Nintendo EPD (sead / agl / gsys) | NVN2 | — |
@@ -114,6 +115,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [FINAL FANTASY TACTICS - The Ivalice Chronicles](010038B015560000/README.md) | `010038B015560000` | 1.4.0 | 19.3.9 | Square Enix's engine | NVN | — |
 | [FINAL FANTASY V](0100AA201415C000/README.md) | `0100AA201415C000` | 1.2.0_5 | 14.3.0 | Unity 2020.3.37f1 IL2CPP | NVN | — |
 | [FINAL FANTASY VI](0100AA001415E000/README.md) | `0100AA001415E000` | 1.2.1_5 | 14.3.0 | Unity 2020.3.37f1 IL2CPP | NVN | — |
+| [FINAL FANTASY VIII Remastered](01008B900DC0A000/README.md) | `01008B900DC0A000` | 1.0.1_5 | 7.4.0 | BaseEngine | OpenGL | — |
 | [FINAL FANTASY X/X-2 HD Remaster](0100BC300CB48000/README.md) | `0100BC300CB48000` | 1.0.0 (base) | 5.4.0 | PhyreEngine (Virtuos) | NVN | — |
 | [FINAL FANTASY XII THE ZODIAC AGE](0100EB100AB42000/README.md) | `0100EB100AB42000` | 1.1.0 | 6.4.0 | PhyreEngine | NVN | — |
 | [Fast Fusion](040041E0212AE000/README.md) | `040041E0212AE000` | v262144 (Switch 2) | 20.5.13 (Ounce) | Shin'en's engine | NVN2 | — |
