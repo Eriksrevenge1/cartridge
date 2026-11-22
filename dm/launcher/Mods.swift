@@ -116,6 +116,39 @@ final class ModsModel: ObservableObject {
         n.count == 16 && n.allSatisfy(\.isHexDigit) && n != tid && Array(n)[4..<12] == Array(tid)[4..<12] && Int(n.suffix(3), radix: 16)! != 0 && n.dropLast(3).last != tid.dropLast(3).last
     }
 
+    /// Code patches are baked into the game's code when it is built (patch_nso.py rewrites the code they add like the game's own: dm/tools/exefs_patch.py); the app's
+    /// Resources/dm/<module>.exefs.tsv lists them by their FNV-1a 64. A rebuild is due when the patch files of this build in the mods that are on are not those.
+    /// nil when they match (or the app predates baking)
+    func codeModsChanged() -> String? {
+        let fm = FileManager.default
+        let tables = ((try? fm.contentsOfDirectory(atPath: game.dm.path)) ?? []).filter { $0.hasSuffix(".exefs.tsv") }
+        var baked = Set<String>(), builds = [String]()
+        for t in tables {
+            guard let text = try? String(contentsOf: game.dm.appendingPathComponent(t), encoding: .utf8) else { continue }
+            for line in text.split(whereSeparator: \.isNewline) {
+                if line.hasPrefix("#") { if let bid = line.split(separator: " ").dropFirst(2).first { builds.append(String(bid).trimmingCharacters(in: CharacterSet(charactersIn: ":")).lowercased()) }; continue }
+                if let h = line.split(separator: "\t").first, h.count == 16 { baked.insert(String(h)) }
+            }
+        }
+        if builds.isEmpty { return nil }
+        var on = Set<String>()
+        for d in Builder.codeModFolders(game.titleID) {
+            for n in (try? fm.contentsOfDirectory(atPath: d)) ?? [] where n.lowercased().hasSuffix(".pchtxt") || n.lowercased().hasSuffix(".ips") {
+                guard let data = fm.contents(atPath: (d as NSString).appendingPathComponent(n)) else { continue }
+                let bid: String
+                if n.lowercased().hasSuffix(".ips") { bid = String(n.prefix { $0.isHexDigit }).lowercased() }
+                else { bid = (String(data: data, encoding: .utf8) ?? "").split(whereSeparator: \.isNewline).first { $0.lowercased().hasPrefix("@nsobid-") }.map { String($0.dropFirst(8).prefix { $0.isHexDigit }).lowercased() } ?? "" }
+                guard bid.count >= 16, builds.contains(where: { $0.hasPrefix(bid.prefix($0.count)) || bid.hasPrefix($0) }) else { continue }
+                var h: UInt64 = 0xcbf29ce484222325
+                for c in data { h = (h ^ UInt64(c)) &* 0x100000001b3 }
+                on.insert(String(format: "%016llx", h))
+            }
+        }
+        if on == baked { return nil }
+        return on.subtracting(baked).isEmpty
+            ? "A code mod built into the game is now off: it stays in the game's code until you rebuild it (Rebuild on the game's page)."
+            : "Code mods changed since the game was built: rebuild it (Rebuild on the game's page) to apply them."
+    }
     /// A Switch 2 Edition (title ID 04…) also takes mods made for its Switch 1 game (01…, the last digit 0), whose files lie under that game's title ID
     var switch1TitleID: String? {
         let t = game.titleID.uppercased()
@@ -202,6 +235,7 @@ struct ModsView: View {
                     Button("Refresh") { m.reload() }
                 }
                 if let s = m.message { Text(s).font(.footnote) }
+                if let s = m.codeModsChanged() { Text(s).font(.footnote).foregroundStyle(.orange) }
             }
             Section("Mods") {
                 if m.mods.isEmpty { Text("No mods installed.").foregroundStyle(.secondary) }

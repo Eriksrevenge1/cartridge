@@ -118,6 +118,16 @@ final class Builder: ObservableObject {
         return names.contains("base") || (names.contains { $0.lowercased().hasSuffix(".nup") } && !names.contains { [".nsp", ".xci", ".nsz", ".xcz"].contains(where: $0.lowercased().hasSuffix) })
     }
     /// The 16-digit title ID in a file's name, or in the name of a game file in a folder ([0400…000])
+    /// The exefs folders of the game's mods that are on, in mods.txt's order (as dm/mac/launcher.c reads them at play): the code patches a build bakes in
+    static func codeModFolders(_ titleID: String) -> [String] {
+        let support = Game.supportRoot.appendingPathComponent(titleID)
+        guard let text = try? String(contentsOf: support.appendingPathComponent("mods.txt"), encoding: .utf8) else { return [] }
+        return text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && !$0.hasPrefix("#") }.compactMap { name in
+            let d = support.appendingPathComponent("mods").appendingPathComponent(name).appendingPathComponent("exefs")
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: d.path, isDirectory: &isDir) && isDir.boolValue ? d.resolvingSymlinksInPath().path : nil
+        }
+    }
     static func titleID(in u: URL) -> String? {
         let names = u.hasDirectoryPath ? ((try? FileManager.default.contentsOfDirectory(atPath: u.path)) ?? []) : [u.lastPathComponent]
         for n in names { if let r = n.range(of: #"\[[0-9A-Fa-f]{16}\]"#, options: .regularExpression) { return String(n[r].dropFirst().dropLast()).lowercased() } }
@@ -219,6 +229,11 @@ final class Builder: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (env["PATH"] ?? "")   // a GUI app's PATH lacks Homebrew's tools
         env["PYTHONUNBUFFERED"] = "1"
+        // The code patches of the game's mods that are on are baked into its modules (DM_EXEFS_PATCHES: patch_nso.py rewrites the code they add like the game's own)
+        if let tid = j.titleID ?? Builder.titleID(in: r.source) {
+            let dirs = Builder.codeModFolders(tid.uppercased())
+            if !dirs.isEmpty { env["DM_EXEFS_PATCHES"] = dirs.joined(separator: ":"); j.lines.append("Code mods baked in: \(dirs.map { URL(fileURLWithPath: $0).deletingLastPathComponent().lastPathComponent }.joined(separator: ", "))") }
+        }
         p.environment = env
         let out = Pipe(), err = Pipe()
         p.standardOutput = out; p.standardError = err
