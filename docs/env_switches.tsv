@@ -20,12 +20,15 @@ DM_AUDREN_TRACE	diagnostic	When set, the CPU audio renderer logs every update wi
 DM_AV1_DAV1D	switch	`=1` decodes AV1 movies with dav1d even where VideoToolbox decodes AV1 (Apple M3 and A17 Pro on), to compare the two or to check the path older chips take (`hle_movie_av1.c`)
 DM_BOOTPROF	diagnostic	When set, logs boot timing: the loader's breakdown (mapping, relocation, probes), Metal library loading, pipeline creation, texture uploads and the first present
 DM_BUNDLE_ID	switch	Overrides the iOS app's bundle ID in `build_ipa.sh` (default `org.nxnative.<title ID in lowercase>`)
+DM_CARTRIDGE_ON_BATTERY	diagnostic	Cartridge only: `=1` makes Cartridge act as if the Mac ran on battery (its battery plan, `Power.swift`), `=0` as if on the charger; for trying the plan on a Mac without a battery
 DM_CHEATS	path	Folder of Atmosphère cheat files: `<folder>/<build ID>.txt` or an SD-card layout (`atmosphere/contents/<title ID>/cheats/`) under it (default `<DM_ROOT>/cheats`); the Mac menu lists and toggles them
 DM_CHEATS_ANY_BUILD	switch	`1` loads a cheat file written for another build of the game when it is the only one (its addresses may not fit: for `cheat_anchor.py` checks)
 DM_CHEATS_DEBUG	diagnostic	Logs every memory write a cheat makes and the cheat file context the menu's "another version" rows come from
 DM_CHEATS_ON	switch	Comma-separated cheat names turned on at launch, besides the saved per-build enabled states
 DM_CHEATS_WINDOW	switch	`1` opens the Mac Cheats panel beside the game from the start
 DM_CONTROLS	path	`=<file>[:<file>…]`: the player's controls files, read in order, later lines winning (`controls.h`: a controller's buttons sent as others, the keyboard map, the mouse as a stick); default `<DM_ROOT>/controls.txt`, and a Mac app's launcher passes `~/Library/Application Support/nxnative/controls.txt` and then the game's own
+DM_CONTROLS_CARD	diagnostic	`=1` shows the controls card (Window › Show Controls) from the game's start (Mac)
+DM_CONTROLS_CARD_CAPTURE	test	`=<folder>`: `dm/host/tests/t_controls_card_mac.m` also draws the controls card over a stand-in picture into PNG files there, in an offscreen window
 DM_CONTROL_NACP	path	The game's control data, `control.nacp` (default: `control.nacp` beside the RomFS, as in the NSP script's extraction folder and the Mac app's Resources); the iOS app sets it to its `dm/control.nacp`. The host answers `fs::GetCacheStorageMax` from it
 DM_COPY_GAME_RESOURCES	switch	`NO` skips the Xcode build phase that copies the game's resources into the app (`stage_resources.sh`, on by default); `build_ipa.sh` sets it for its unsigned build, which packs them itself
 DM_COPY_ROMFS	switch	`NO` keeps the game files out of the app, in the Xcode build phase (`stage_resources.sh`) and in the unsigned IPA of `build_ipa.sh` (on by default): `main.m` takes the validated `Documents/romfs.img` copied by `scripts/push_romfs.sh`, then a `Documents/romfs` folder; the build writes the image's identity as `romfs.id` into the app, and `main.m` uses only a matching image (`--romfs separate` of the NSP script sets this)
@@ -36,6 +39,7 @@ DM_DBG	diagnostic	When set, prints the guest's `svcOutputDebugString` text to st
 DM_DBG_AU_FRAMES	diagnostic	`=<frames>` asks the Mac's Core Audio output for that many frames per callback instead of about 5 ms (1024 reproduces the iOS default that caused crackling)
 DM_DETCLOCK	switch	`=<step ns>`: from the first present on, the guest clock advances a fixed step per present, and the random source uses a fixed seed (replay and test runs). Relative thread sleeps and synchronization timeouts use host time
 DM_DETCLOCK_PACE	switch	`=1` with `DM_DETCLOCK`: each frame takes at least one clock step of wall time, so background loading keeps up with the fixed clock (used by the screenshot gate)
+DM_DISPLAY_120	switch	A Switch 2 game's 120 Hz display (`hle_vi.c`): `0` off (the display stays at 60 Hz), `1` the default (120 Hz when the game turns its 120 Hz capability on and the screen runs at 120 Hz), `2` forced, for diagnostics
 DM_DISPLAY_NAME	switch	Overrides the iOS app's name in `build_ipa.sh` (default the game name in the base NSP's control data)
 DM_DYNAMIC_RESOLUTION	player	`1` lets the game's own dynamic resolution run, `0` (default) keeps full resolution; only on the builds that declare the DYNAMIC_RESOLUTION capability: NieR:Automata 1.0.3 (its patches.py; scales between 70 and 100 %, `hle_fpslock.c` `k_nier_dr`) and Ocarina of Time (its frame step stub of the level function, state page +0x40: on, it steps one level at a time on the measured load, as the game's own extrapolation from pixel count kept it at its lowest level on Apple GPUs). The launcher's Dynamic resolution
 DM_EMBED_TAG	path	Set by the iOS app of a game of several programs: the tag of the running program's embedded sections (`p<N>`, `gen_embed.py --tag`)
@@ -44,6 +48,7 @@ DM_ENV_FILE	path	`=<file>` makes `build_ipa.sh` bake its `KEY=VALUE` lines into 
 DM_ENV_FILE_KEYS	switch	Set by the iOS app and the Mac launcher at launch to the space-separated names an env file set; the settings screen keeps those values and shows them greyed out
 DM_ENV_LAUNCH_KEYS	switch	Set at launch by the Mac launcher (the launcher settings already in the environment) and the iOS app (every DM_* variable already in it) to the space-separated names; the settings screen keeps those values and shows them greyed out
 DM_EXEC_OUT	path	File `oe::ExecuteProgram` records the next program and its parameters in, then the app ends (the iOS app of a game of several programs sets it to `Documents/program.bin`)
+DM_EXEFS_PATCHES	path	The `exefs` folders of the mods that are on, `:`-separated in `mods.txt`'s order: their IPS, IPS32 and pchtxt patches are applied at load (`hle_exefs.c`); the Mac launcher sets it from `mods.txt`, set by hand it wins
 DM_EXFAT_DIR	test	`=<folder on an exFAT volume>`: `test_shader_cache.py` (`Renumbered`) makes its cache files there, so `test_on_the_drive` writes and reads 200 entries on that drive, whose new file may take another inode at its first write (issue #2434), without checking how often the store opened it
 DM_FD_LOG	diagnostic	`=<seconds>` logs, every that many seconds, the number and kinds of file descriptors the process has open
 DM_FIXED_TIME	switch	`=<seconds>`: the user clock always returns that time and the host time zone is pinned to UTC, for deterministic comparison
@@ -101,6 +106,7 @@ DM_HLECOUNT	diagnostic	`=<file>` (`%d` = process ID) writes at exit a TSV of how
 DM_HOME_QUIT	player	`0` turns off quitting with the controller's Home button (Mac, on by default): held for 2 s it opens a quit prompt over the game, A quits as ⌘Q does, B or Home closes it (`home_quit.h`)
 DM_HOME_QUIT_CAPTURE	test	`=<folder>`: `tests/t_home_quit_mac.m` also draws the Home button's quit prompt and hold indicator into PNG files there
 DM_HOME_QUIT_TEXT	switch	The texts of the Home button's quit prompt in the player's language, one per line: the hold indicator, the title, the note, the quit and the cancel button; a front end such as NX2Apple sets it ([Starting a game](frontends.md#starting-a-game)), an empty or missing line keeps the English text
+DM_HOME_TAP	switch	`=0`: a quick tap of a controller's Home button does nothing, instead of bringing Cartridge forward in console mode on the game (Mac)
 DM_HTML	path	Folder of the offline HTML pages (default: `html` beside the RomFS)
 DM_ICON	path	`=<image>` gives `build_ipa.sh` another app icon (default the `icon.jpg` beside the RomFS)
 DM_IMPORTS	diagnostic	When set, logs each import the loader binds to a host function and each forced takeover
@@ -411,6 +417,7 @@ DM_SCREEN_FOV	diagnostic	`off` with DM_SCREEN_ASPECT: the scene keeps the game's
 DM_SCREEN_HUD	diagnostic	`=<edge>,<listed>,<full width>,<full height>[,<tallest>]` with DM_SCREEN_ASPECT: the layout rules' distances and sizes in the 1280x720 space (default 280,100,1270,710,1300)
 DM_SCREEN_MATCH	switch	`0` keeps the screen's refresh rate in fullscreen; by default a Mac screen whose rate is not a multiple of the game's frame rate switches to one that is (144 → 120 Hz), and a variable-refresh screen to a fixed-rate mode at a multiple (ProMotion 120 → 60 Hz at 60 and 30 fps)
 DM_SDCARD	path	The SD card folder that `nn::fs::MountSdCard` mounts (default `$DM_ROOT/sdmc`, made at the first mount; a mod's own code reads its files from it); the iOS app sets `Documents/sdmc`
+DM_SETUP_PRETEND	diagnostic	Cartridge only: `=<item>,…` makes those setup assistant items (`repo`, `xcode`, `xcodeSetup`, `metal`, `ios`, `brew`, `tools`, `python`, `keys`, `games`) read as missing, to try their fixes on a Mac that has everything
 DM_SF_TRACE	diagnostic	`=1` logs every request on the game's own HIPC client sessions that the host answers (`hle_sf.c`)
 DM_SHADER_FILES	switch	`1` packs an NVN game's shader library into the unsigned IPA of `build_ipa.sh` as its separate files, `msl/b-<chain>/`, not as the one file `b-<chain>.img`, for install tools that cannot copy a large file (AltServer: 2 GiB) (`pack_ipa.py --shader-files`; off by default; `--shader-files` of the NSP script sets this)
 DM_SHAKE_G	switch	`=<G>`: on iOS, the acceleration beyond gravity above which a flick of the phone shakes the controller's six-axis sensor (default 1.5)
