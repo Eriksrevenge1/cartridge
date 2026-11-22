@@ -8,7 +8,7 @@ xc2-ns2	game/xc2-ns2: add Xenoblade Chronicles 2's Switch 2 Edition profile	forw
 xcde-ns2	game/xcde-ns2: add Xenoblade Chronicles: Definitive Edition's Switch 2 Edition profile	forwarded seedds/nxnative#3137	pr/xcde-ns2	monolith-split	b93fdc57	the mods and cheats section stays in the fork until mods-* land
 display-120	gfx/vi: a Switch 2 display at 120 Hz, and the 120 Hz link on every 120 Hz screen	forwarded seedds/nxnative#3154	pr/display-120	-	13ffd5ec 32f4abeb	without frame generation (removed) and auto-HDR
 auto-hdr	gfx/present: auto-HDR on a screen with HDR on (Mac and iOS)	forwarded seedds/nxnative#3155	pr/auto-hdr	-	5afbc4bf 0bc6e0e9	SDR output unchanged
-native-hdr	gfx/vi: a Switch 2 game's own HDR, decoded on a screen with HDR on	pending	pr/native-hdr	auto-hdr	cc9b7ed8	Ocarina of Time checked on the DELL in HDR mode; Cartridge's calibration screen stays fork-only
+native-hdr	gfx/vi: a Switch 2 game's own HDR, decoded on a screen with HDR on	forwarded seedds/nxnative#3183	pr/native-hdr	auto-hdr	cc9b7ed8	Ocarina of Time checked on the DELL in HDR mode; Cartridge's calibration screen stays fork-only; sent stacked on #3155 (the PR says to review that first)
 mac-fullscreen	host/front_mac: fullscreen's mode switch once and settled before the display link, the screen by name	forwarded seedds/nxnative#3157	pr/mac-fullscreen	display-120	0135a4bf 456febc7	DM_SCREEN by name; display.screen preference
 link-probation	nvn/present: a display link tried again after a rescue is on probation	forwarded seedds/nxnative#3150	pr/link-probation	-	ca22e754	the probation part of ca22e754 only
 fstep-link	nvn/fstep: judge frames around display-link events by their GPU time	forwarded seedds/nxnative#3156	pr/fstep-link	-	a13f118b
