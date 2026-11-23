@@ -29,8 +29,9 @@ def game_names():   # the games table's names (dm/games/README.md), for titles t
     return [n for n in re.findall(r'^\| \[([^\]]+)\]\(', text, re.M) if len(n) >= 6]
 
 
-def player_notes(subjects, names=()):
-    """Release notes from commit titles: grouped by AREAS, a title naming a game under Games, merges left out, the rest counted"""
+def player_notes(subjects, names=(), actions=()):
+    """Release notes from commit titles: grouped by AREAS, a title naming a game under Games, merges left out, the rest counted; first, under
+    'What to do', the commits' Players: trailers (what a player must do, such as rebuild a game, which a title in another area would hide)"""
     groups, other = {g: [] for g, _ in AREAS}, 0
     for t in subjects:
         t = t.strip()
@@ -42,6 +43,8 @@ def player_notes(subjects, names=()):
         if group: groups[group].append(t)
         else: other += 1
     out = []
+    acts = list(dict.fromkeys(a.strip() for a in actions if a.strip()))
+    if acts: out += ['What to do:'] + [f'- {a}' for a in acts] + ['']
     for g, items in groups.items():
         if items: out += [f'{g}:'] + [f'- {t}' for t in items] + ['']
     if other: out.append(f'And {other} other engine change{"s" if other != 1 else ""} (shaders, memory, services, tools).')
@@ -93,7 +96,8 @@ def main():
                 r = subprocess.run(['git', '-C', ROOT, 'rev-list', '-n', '1', p], capture_output=True, text=True)
                 if r.returncode == 0: since = r.stdout.strip(); break
             log = run(['git', '-C', ROOT, 'log', '--no-merges', '--format=%s', f'{since}..HEAD' if since else '-15'])
-            notes = player_notes(log.splitlines(), game_names())
+            acts = run(['git', '-C', ROOT, 'log', '--no-merges', '--format=%(trailers:key=Players,valueonly,separator=%x0A)', f'{since}..HEAD' if since else '-15'])
+            notes = player_notes(log.splitlines(), game_names(), acts.splitlines())
         cmd = ['gh', 'release', 'create', tag, zip_, '--repo', repo, '--target', sha, '--title', f'Cartridge 1.{build}', '--notes', notes]
         print(run(cmd))
 

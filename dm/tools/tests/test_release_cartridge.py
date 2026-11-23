@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""scripts/release_cartridge.py: release notes keep what players notice (games, display, controls, sound, Cartridge) and count the rest; a release never goes
+"""scripts/release_cartridge.py: release notes keep what players notice (games, display, controls, sound, Cartridge), put Players: trailers first and count the rest; a release never goes
 backwards (newest_build)."""
 import importlib.util, unittest
 from pathlib import Path
@@ -25,6 +25,10 @@ class Notes(unittest.TestCase):
     def test_nothing_noticeable(self):
         self.assertEqual(rc.player_notes(['nvn/vertex: x']), 'And 1 other engine change (shaders, memory, services, tools).')
         self.assertEqual(rc.player_notes([]), 'No changes players notice.')
+
+    def test_players_trailers_first(self):
+        notes = rc.player_notes(['tools/rewriter: bake mods' + "'" + ' code patches'], [], ['Rebuild games with code mods.', '', 'Rebuild games with code mods.'])
+        self.assertTrue(notes.startswith('What to do:\n- Rebuild games with code mods.\n\nAnd 1 other engine change'))
 
     def test_game_names_from_the_table(self):
         self.assertIn('Super Mario Bros. Wonder', rc.game_names())
