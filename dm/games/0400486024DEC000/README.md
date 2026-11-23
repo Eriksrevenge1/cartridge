@@ -337,6 +337,7 @@ Its 37 kernels that correct samples, NDSR's network among them, gave about 0.25 
 - [Code patches of mods rewritten with the module](../../../docs/reference/rewriter.md#code-patches-of-mods-rewritten-with-the-module): Fast Travel's menu letters (2026-11-21).
 - [A mod's code that calls an SDK function it does not import](../../../docs/reference/rewriter.md#a-mods-code-that-calls-an-sdk-function-it-does-not-import): Fast Travel's SD card mount (2026-11-21).
 
+- [A covered window's rescue kept the display link off after the window came back](../../../docs/reference/frame-rate.md#a-covered-windows-rescue-kept-the-display-link-off-after-the-window-came-back): stutter for up to a minute after each return to fullscreen on the ROG with ULMB 2; resolved in the host (2026-11-22).
 - [A display-link silence read as the game's late frames](../../../docs/reference/frame-rate.md#a-display-link-silence-read-as-the-games-late-frames): the hold stepped to 20 fps when the window was covered and shown again.
 
 - [Upload retirement can block Metal 4 feedback](../../../docs/reference/memory.md#upload-retirement-can-block-metal-4-feedback). NX18 reported a freeze on an iPhone 18 Pro Max after loading a save. A synthetic lock stall reproduced the feedback blockage. The cause of the device freeze remains open.

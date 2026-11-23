@@ -20539,7 +20539,22 @@ static inline void link_event(void) { __atomic_add_fetch(&g_link_events, 1, __AT
 // stall up to 60 s. The requested g_dm_present_link stays unchanged; all rescue state changes take g_pq_mu, and link_sync handles the link object on the enqueue thread.
 #define LINK_RESCUE_NS 500000000ull
 static _Atomic int g_rescue_mode;   // Also read by link_on without g_pq_mu, to stop pacing on silent ticks immediately
-static uint64_t g_rescue_back_at, g_rescue_back_ns = 3000000000ull, g_rescue_n;
+#define RESCUE_BACK_NS 3000000000ull
+static uint64_t g_rescue_back_at, g_rescue_back_ns = RESCUE_BACK_NS, g_rescue_n;
+// The window is covered (another Space over a fullscreen window, another app's window over it): macOS calls the link of a covered window about once a second on purpose, so a
+// rescue then says nothing about the link. Each rescue while covered used to double the wait for the next try, up to 60 s, and the present thread kept pacing after the window
+// came back: on a ROG XG27AQNGV at a fixed 60 Hz (ULMB 2, Ocarina of Time) 12 s of 59 and 10 dropped frames per 300 after each return, then none once the link was tried.
+// Now a rescue while covered keeps the wait as it is, and the window's return tries the link at once with the first wait again (mtl_window_visible). Under g_pq_mu
+static int g_win_covered;
+void mtl_window_visible(int visible) {   // the front end's main thread, on each change of the window's visibility (front_mac.m)
+    pthread_mutex_lock(&g_pq_mu);
+    g_win_covered = !visible;
+    if (visible) {
+        g_rescue_back_ns = RESCUE_BACK_NS;
+        if (g_rescue_mode) { g_rescue_back_at = now_ns(); MLOG("display link: the window is visible again, the link is tried at the next frame (rescue #%llu)", (unsigned long long)g_rescue_n); }
+    }
+    pthread_mutex_unlock(&g_pq_mu);
+}
 // A link tried again after a rescue is on probation: once attached to its run loop, one that has not called back within link_probe_ns() of active time goes back to the rescue
 // at once instead of waiting STALL_NS (100 ms) and dropping frames for LINK_RESCUE_NS (500 ms). The first accepted callback ends probation. Under g_pq_mu
 #define LINK_PROBE_NS 67000000ull
@@ -21257,7 +21272,7 @@ void mtl_present_wait(uint64_t tk) {
             if (probe_failed) { g_link_probe_fail++; MLOG("display link tried again and silent for %.0f ms: the present thread takes drawables again (rescue #%llu, %llu tries failed), the link is tried again in %.0f s", pelapsed / 1e6, (unsigned long long)g_rescue_n, (unsigned long long)g_link_probe_fail, g_rescue_back_ns / 1e9); }
             else MLOG("display link silent for %.0f ms while active: the present thread takes drawables itself (rescue #%llu), the link is tried again in %.0f s", elapsed / 1e6, (unsigned long long)g_rescue_n, g_rescue_back_ns / 1e9);
             g_link_probe_pending = 0; g_link_probe_at = 0;
-            g_rescue_back_ns = g_rescue_back_ns < 30000000000ull ? g_rescue_back_ns * 2 : 60000000000ull;
+            if (!g_win_covered) g_rescue_back_ns = g_rescue_back_ns < 30000000000ull ? g_rescue_back_ns * 2 : 60000000000ull;   // covered: the silence was macOS's (mtl_window_visible)
         }
         if (active && !g_stall_red && elapsed >= STALL_RED_NS) { g_stall_red = 1; MLOG("[RED] display link silent for %.1f s while active; presenting relies entirely on fallback frame drops, the picture is frozen", elapsed / 1e9); }
     }

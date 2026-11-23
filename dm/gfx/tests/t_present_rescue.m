@@ -53,7 +53,7 @@ static int checks, failed;
 #define CHECK(name, ok) do { int pass = !!(ok); checks++; failed += !pass; printf("%s: %s\n", name, pass ? "PASS" : "FAIL"); } while (0)
 static void reset(void) {
     test_now = 10000000000ull; test_focus = 1; test_focus_since = 0;
-    g_dm_present_link = 1; g_rescue_mode = 0; g_rescue_back_ns = 3000000000ull; g_rescue_n = 0;
+    g_dm_present_link = 1; g_rescue_mode = 0; g_rescue_back_ns = 3000000000ull; g_rescue_n = 0; g_win_covered = 0;
     g_link_probe_pending = 0; g_link_probe_at = 0; g_link_probe_fail = 0;
     atomic_store(&g_test_link_hold, 0);
     g_link_tick_ns = test_now - 1000000000ull; g_stall_t0 = g_link_tick_ns;
@@ -93,6 +93,25 @@ static void backoff(void) {
         CHECK("retry delay doubles and stops at 60 s", g_rescue_back_at - test_now == seconds[i] * 1000000000ull);
         test_now = g_rescue_back_at; link_sync();
     }
+}
+// A covered window (another Space over a fullscreen window): its link is called about once a second by macOS, so rescues then keep the wait as it is, and the window's
+// return tries the link at the next frame with the first wait again (ROG XG27AQNGV, ULMB 2: 12 s of stutter after each return when the wait had grown to 60 s)
+static void covered(void) {
+    reset();
+    g_stall_t0 = g_link_tick_ns = test_now - 500000000ull; wait_frame();   // visible: 3 s, the next wait 6 s
+    test_now = g_rescue_back_at; link_sync();
+    mtl_window_visible(0);
+    for (int i = 0; i < 4; i++) {
+        g_stall_t0 = g_link_tick_ns = test_now - 500000000ull; wait_frame();
+        CHECK("a rescue while covered does not grow the wait", g_rescue_mode == 1 && g_rescue_back_at - test_now == 6000000000ull);
+        test_now = g_rescue_back_at; link_sync();
+    }
+    g_stall_t0 = g_link_tick_ns = test_now - 500000000ull; wait_frame();
+    test_now += 1000000000ull; mtl_window_visible(1); link_sync();
+    CHECK("the window's return ends the rescue at the next frame", !g_rescue_mode && g_dm_present_link == 1);
+    CHECK("the window's return starts the wait again at 3 s", g_rescue_back_ns == 3000000000ull);
+    reset(); g_rescue_back_ns = 60000000000ull; mtl_window_visible(1);
+    CHECK("the window's return with no rescue only resets the wait", !g_rescue_mode && g_rescue_back_ns == 3000000000ull);
 }
 static void settings(void) {
     for (int mode = 0; mode <= 2; mode += 2) {
@@ -376,7 +395,7 @@ static void metal_lifecycle(void) {
 int main(int argc, char **argv) { @autoreleasepool {
     alarm(10); setbuf(stdout, NULL);
     if (argc > 2 || (argc == 2 && strcmp(argv[1], "--metal"))) return 2;
-    thresholds(); backoff(); settings(); startup_rescue(); lifecycle(); latency(); thirty(); vrr120(); forty(); settling(); probation();
+    thresholds(); backoff(); covered(); settings(); startup_rescue(); lifecycle(); latency(); thirty(); vrr120(); forty(); settling(); probation();
     if (argc == 2) metal_lifecycle();
     printf("present rescue: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }
