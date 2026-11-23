@@ -316,6 +316,7 @@ int main(int argc, char **argv) {
     // The player's controls (dm/host/controls.h): the file every game reads, then this game's own, whose lines win
     snprintf(p, sizeof p, "%s/Library/Application Support/nxnative/controls.txt:%s/controls.txt", home, getenv("DM_ROOT")); setenv("DM_CONTROLS", p, 0);
     mods_overlay(getenv("DM_ROOT"));
+    snprintf(p, sizeof p, "%s/Pictures/nxnative/%s", home, id); setenv("DM_ALBUM_DIR", p, 0);   // local album screenshots (hle_album.c); created lazily on first save
     snprintf(p, sizeof p, "%s/Library/Application Support/nxnative/system", home); setenv("DM_SYSTEM_DIR", p, 0);   // the player's own console files, for every game
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);
     snprintf(p, sizeof p, "%s/font", dm); setenv("DM_FONT_DIR", p, 0);
