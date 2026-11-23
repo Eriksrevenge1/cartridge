@@ -85,6 +85,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [Super Mario 3D All-Stars: Super Mario Sunshine](#super-mario-3d-all-stars-super-mario-sunshine) | 2 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Super Smash Bros. Ultimate](#super-smash-bros-ultimate) | 11 | 0 | 0 | 1 | 0 | `game` |
 | [Taiko Risshiden V DX](#taiko-risshiden-v-dx) | 1 | 0 | 0 | 2 | 0 | `game` |
+| [The Legend of Heroes: Trails into Reverie](#the-legend-of-heroes-trails-into-reverie) | 0 | 0 | 0 | 1 | 0 | `game` |
 | [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 0 | 43 | 0 | 0 | `build` → `game` ×2 |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Ocarina of Time](#the-legend-of-zelda-ocarina-of-time) | 0 | 0 | 23 | 3 | 0 | `game` ×7 |
@@ -565,6 +566,14 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **function-matched** (`main` of builds without CUTS): frame limiter threshold: 0 when N = 1: 1 function, 1 cut
 - **function-matched** (`main` of builds without CUTS): frame limiter threshold: 0 when N = 1: 1 function, 1 cut
 
+### The Legend of Heroes: Trails into Reverie
+
+[The Legend of Heroes: Trails into Reverie](../../dm/games/01008CB0156BC000/README.md), `01008CB0156BC000`, [patches.py](../../dm/games/01008CB0156BC000/patches.py).
+
+- **`game`**, frame rate, at goal, checked: complete timing callback verified in v0 and 1.0.4: render and camera scheduler at 60 Hz with elapsed animation deltas. The game's own accumulator and time-scale code; NVN already presents at interval 1, and neither Final Fantasy XII main matches
+
+- **function-matched** (`main` of builds without CUTS): Reverie frame scheduler and elapsed step: 1 function, 5 cuts
+
 ### The Legend of Zelda: Breath of the Wild
 
 [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md), `01007EF00011E000`, [patches.py](../../dm/games/01007EF00011E000/patches.py).
@@ -650,7 +659,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **`game`**, frame rate, at goal, checked: v131072 main: one function with this fingerprint, the site and its free registers read by disassembly (2026-11-08): frame ratio from the host's step. The game's own frame-ratio division, found by its function's fingerprint on any build that keeps the function
 - **`game`**, rendering, at goal, checked: v131072 main: one function with each fingerprint (the level function a leaf, x2..x11 / x16 / x17 / s0..s2 free), its callers, the update and the controller fields read by disassembly, the fields read in play (2026-11-08); the climb run natively against a model of the update and in play to full size (2026-11-09); 30 fps threshold scaling checked in test_ocarina_drs.py and in play at 30 fps on an M2 Air (PR #1954, 2026-11-16): dynamic resolution: full size, or a climb on the load measured at each level. The game's own dynamic-resolution level function and update, found by their functions' fingerprints on any build that keeps both; switchable (DM_DYNAMIC_RESOLUTION)
 - **`game`**, rendering, at goal, checked: v131072 main: one function with this fingerprint (main+0x31d3200, 0xfc8 bytes, one caller main+0x31c00cc); the status ubfx at +0xce4, the store at +0xd48 (the only float store to #0xe5c in main; s0 computed from the update's w0 at +0xd34, never reread from +0xe5c) and the size loop clearing bit 3 of +0xe2c read by disassembly (2026-11-09, 2026-11-23); guard, status and store stubs executed natively on ARM64 in test_ocarina_drs.py: render scale: the 3D views at a fraction of the game's own size (DM_RENDER_SCALE). The game's own view-size update (its test of the dynamic-resolution status and its scale store), found by its function's fingerprint on any build that keeps it; the level function's stub above holds level 0 under a scale
-- **`game`**, rendering, at goal, checked: v131072 main: one function per fingerprint, free registers read at each site; indexed pane names, classes and dimensions checked against the UIL records. PR #3037 measured Vert+ framing and the movie aspect on Mac; final iPad title retest pending: screen shape: taller render targets, cameras, Layout2 panes and a 16:9 movie viewport (DM_SCREEN_ASPECT). The game's own display setup, camera, pane and movie code; installed together after every function matches. Indexed pane edits verify the authored name, class and dimensions they use
+- **`game`**, rendering, at goal, checked: v131072 main: one function per fingerprint, free registers read at each site; indexed pane names, classes and dimensions checked against the UIL records. In-place Vert+ projection-object updates (and DM_SCREEN_FOV=off Hor-) executed on ARM64 in test_ocarina_screen_shape.py and verified in Kakariko Village on Mac at 16:9, 16:10 and 4:3 (2026-11-23); 0/3 projection fingerprint matches in TOTK, BOTW and Mario Kart World; physical iPad/iPhone retest pending: screen shape: taller render targets, cameras, Layout2 panes and a 16:9 movie viewport (DM_SCREEN_ASPECT). The game's own display setup, camera, pane and movie code; installed together after every function matches. Indexed pane edits verify the authored name, class and dimensions they use
 
 - **function-matched** (`main` of builds without CUTS): movie pictures a frame: up to 2, the constructor's value for an argument of 2 or more, whatever its caller passes (1): 1 function, 1 cut
 - **function-matched** (`main` of builds without CUTS): movie update cap: 3 pictures a frame, the frame step's largest hold, in place of the limit (2), which also sizes the decoder pipeline: 1 function, 1 cut
