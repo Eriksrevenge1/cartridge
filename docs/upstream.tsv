@@ -20,9 +20,9 @@ mods-exefs	host/exefs: apply mods' IPS, IPS32 and pchtxt patches to the loaded m
 mods-archives	host/fs: mod folders for add-on content, and mod files packed into ARH1 archives	forwarded seedds/nxnative#3153	pr/mods-archives	-	bdeb3cc3
 mac-mods	mac: a mods folder per game, turned on by mods.txt	forwarded seedds/nxnative#3146	pr/mac-mods	-	dcba5faa	launcher.c mods_overlay
 bdat-port	scripts/bdat_port: port Monolith table mods to another version of the game's data	forwarded seedds/nxnative#3144	pr/bdat-port	-	22ab1383
-cheat-anchor-bss	tools/cheat_anchor: bound .bss by the module's end, not the loaded image	forwarded seedds/nxnative#3145	pr/cheat-anchor-bss	-	20440050
+cheat-anchor-bss	tools/cheat_anchor: bound .bss by the module's end, not the loaded image	landed e8460ebc	pr/cheat-anchor-bss	-	20440050
 rebuild-keeps-icon	scripts/build_ipa_from_nsp: a Mac app rebuilt in place keeps its icon	forwarded seedds/nxnative#3148	pr/rebuild-keeps-icon	-	0c3132de
-bench-lang	scripts/bench: start the game in the build's default language	forwarded seedds/nxnative#3147	pr/bench-lang	-	ca22e754	the bench.py part of ca22e754 only
+bench-lang	scripts/bench: start the game in the build's default language	fork-only (superseded by 7130d4db: the host picks the default language from control.nacp when DM_LANG is unset, #3147)	pr/bench-lang	-	ca22e754	the bench.py part of ca22e754 only
 launcher	Cartridge itself (dm/launcher: library, builds, settings, updates, the engine it carries)	fork-only (Cartridge, the fork's product)	-	-	dcba5faa 71d970ad 2c22d3c4 9656b2e6 80065ce9 74ab8c96
 home-opens-cartridge	the Home tap and View+Menu opening Cartridge	fork-only (Cartridge: needs the launcher app)	-	-	b54e919d 56d411a4	home_quit.h, front_mac.m
 engine-fingerprint	pack_app.py's engine commit and fingerprint (ENGINE_COMMIT, ENGINE_GAMEHASH, DMEngineHash)	fork-only (Cartridge: the engine it carries)	-	-	80065ce9
