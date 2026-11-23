@@ -1668,10 +1668,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 ## Cheats on a Switch
 
 - `scripts/cheat_anchor.py import` keeps every pointer cheat bound to its own build (`kept for build … only: address 0xC284D8 is outside the main NSO image or crosses a segment`), and `compile` / `check` refuse `.bss` targets (`address … is outside the main NSO image`), for addresses the NSO header places in `.bss`. → [Pointer bases in .bss refused as outside the image](../reference/cheats.md#pointer-bases-in-bss-refused-as-outside-the-image)
-
-## Cheats on a Switch
-
-- `scripts/cheat_anchor.py import` keeps every pointer cheat bound to its own build: `kept for build … only: address 0xC284D8 is outside the main NSO image or crosses a segment`, for an address the NSO header places in `.bss`. → [Pointer bases in .bss refused as outside the image](../reference/cheats.md#pointer-bases-in-bss-refused-as-outside-the-image)
+- `scripts/cheat_anchor.py import` keeps every pointer cheat bound to its own build: `kept for build … only: address 0xC284D8 is outside the main NSO image or crosses a segment`, for an address the NSO header places in `.bss`. → [Pointer bases in .bss refused as outside the image](../reference/cheats.md#pointer-bases-in-bss-refused-as-outside-the-image-1)
 
 ## Game state
 
