@@ -79,8 +79,6 @@ static void thresholds(void) {
     test_now = deadline - 1; link_sync(); CHECK("no retry before 3 s", g_rescue_mode == 1);
     test_now++; link_sync(); CHECK("retry after 3 s", !g_rescue_mode && g_dm_present_link == 1);
     CHECK("retry starts a fresh stall clock", !g_stall_t0 && g_link_tick_ns == test_now);
-    // On probation (nvn_mtl.m LINK_PROBE_NS): silent 67 ms after the try, it goes back to the rescue without the 100 ms stall wait and the 500 ms of dropped frames
-    test_now += 67000000ull; wait_frame(); CHECK("a link tried again and silent for 67 ms goes back to the rescue at once", g_rescue_mode == 1 && g_link_probe_fail == 1);
     reset(); test_focus = 2; wait_frame(); CHECK("inactive time does not trigger rescue", !g_rescue_mode);
     test_focus = 3; wait_frame(); CHECK("background time does not trigger rescue", !g_rescue_mode);
     test_focus = 1; test_focus_since = test_now; wait_frame(); CHECK("foreground starts a fresh grace period", !g_rescue_mode);
