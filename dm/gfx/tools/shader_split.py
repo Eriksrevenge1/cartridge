@@ -4556,7 +4556,7 @@ def scan_file_in(args):
     if head[4:5] == b'\x78' and path.endswith('.gz') and (z := gust_gz(d)) is not None: d = z   # Gust's chunked zlib (gust_gz)
     # Containers the generic prefilter below would drop, read whole by scan_blob: Monolith's, which it also ships loose, without an ARH/ARD archive (Xenoblade DE;
     # DRSM model streams contain several embedded XBC1 resources; DMPA model packages (.wimdo) keep plain HCPS programs beside the model: 18 of Xenoblade DE's, the only copy
-    # of 11 shaders its Switch 2 Edition's prologue draws with), and Phyre's effects and FFX/X-2's loose programs, their two lengths before the code (phyre_shaders)
+    # of 14 shaders its Switch 2 Edition's prologue draws with), and Phyre's effects and FFX/X-2's loose programs, their two lengths before the code (phyre_shaders)
     if d[:4] in (b'HCPS', b'xbc1', b'DRSM', b'DMPA', b'RYHP') or d[:8] == b'cmp\0zlib' or d[8:12] == GFX_MAGIC:
         scan_blob(d, '/' + rel, found)
         return rel, uniq_keys(found), var_pairs(found), trees

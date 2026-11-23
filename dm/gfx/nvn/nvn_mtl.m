@@ -18487,7 +18487,7 @@ static const char *cctx_snap(void) {
 // When the game itself asks for 30 fps (pacing by the game's present interval, interval 2, hle_nvn.c) the display link runs at 30 Hz too: games whose logic counts frames, such as Engage, are not pulled up to 60 fps by the display link on iOS
 __attribute__((weak)) int nvn_game_fps(void) { return 60; }   // hle_nvn.c provides the strong definition
 int mtl_fps_target(void) { static int env = -2; if (env == -2) { const char *e = getenv("DM_FPS"); env = e ? atoi(e) : -1; if (env != 30 && env != 60) env = -1; else MLOG("DM_FPS=%d: frame rate pinned by the test switch", env); }
-    int g = nvn_game_fps(); return env > 0 ? env : g == 30 || g == 120 ? g : 60; }
+    int g = nvn_game_fps(); return env > 0 ? env : g == 30 || g == 40 || g == 120 ? g : 60; }   // 40: frame step in ticks of 1/120 s (hle_nvn.c fps_step_cap)
 // Hand a submission to the GPU in segments (DM_NVN_CUT=draw count, 0 = off; default 64): when the game holds back the next frame's submit until this frame's GPU work is done (The Legend of Zelda: Breath of the Wild: the main thread's nvnSyncWait on the fence of the frame just submitted),
 // the GPU sits idle for the milliseconds the host spends translating inside the submit (in the shrine each frame is GPU 13 ms + translation 7 ms back to back). Each time this many draws have accumulated, the command buffer encoded so far is committed between two passes: the GPU runs the earlier passes while the CPU translates the later ones.
 // Cut only when no encoder is open and no pass is deferred / merged / hoisted; commit this batch's uploads first (later draws use them). The fence signal and completion work stay on the last segment only: the queue executes in commit order and every encoder starts with a queue barrier
@@ -20198,6 +20198,7 @@ static int link_on(void) { return g_dm_present_link && !atomic_load(&g_rescue_mo
 // In fullscreen the Mac front end switches such a screen to a rate that is a multiple where it has one (front_screen_match), and the range is set again for it (link_sync)
 __attribute__((weak)) int front_screen_settling(void) { return 0; }   // front_mac.m: startup fullscreen not entered yet, fullscreen match pending, or mode switched under 1 s ago
 __attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // front_mac.m, front_ios.m; some graphics unit tests supply their own
+__attribute__((weak)) int front_screen_capable_fps(void) { return front_screen_max_fps(); }   // front_mac.m: native rate before front_screen_match; iOS and unit tests follow front_screen_max_fps
 __attribute__((weak)) void front_screen_match(int fps) { (void)fps; }   // front_mac.m; graphics unit tests and iOS have none
 __attribute__((weak)) void front_picture_shape(int w, int h) { (void)w; (void)h; }   // front_mac.m, front_ios.m; graphics unit tests have none
 static CAFrameRateRange link_range(int mode) {
@@ -20294,6 +20295,7 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     if (!want) { g_link_probe_pending = 0; g_link_probe_at = 0; }
     pthread_mutex_unlock(&g_pq_mu);
     if (!g_present_link_env && want && mtl_fps_target() == 30 && link_30hz()) want = 3;   // Power-saving mode: display link at 30 Hz when the link rate is automatic (DM_PRESENT_LINK set: its mode holds)
+    if (!g_present_link_env && want && mtl_fps_target() == 40) want = 2;   // 40 fps needs the 120 Hz link (3 ticks = 25 ms) when the link rate is automatic
     // The 120 Hz link (a frame every other tick, link_120) at 60 fps: in fullscreen on any screen whose rate is a multiple of 120. Decided before the screen match, which then asks for a multiple of 120, so a 240 Hz
     // variable-refresh screen switched mid-run comes back on the 120 Hz link and not the 60 Hz one (link_120)
     static int l120_was; int l120 = want == 1 ? link_120() : 0;
