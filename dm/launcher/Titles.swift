@@ -100,12 +100,54 @@ final class Titles: ObservableObject {
         case .app(let p): NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: p), configuration: NSWorkspace.OpenConfiguration())
         case .process(let exe, let args): run(exe, args)
         // the bottle by its path, which cxstart takes as it is (CXBottle.pm find_bottle): a bottle on another drive, or two bottles of one name, start right
-        case .crossover(let bottle, let args): run(Places.mac.cxstart, ["--bottle", bottle, "--"] + args)
+        case .crossover(let bottle, let args): run(Places.mac.cxstart, ["--bottle", bottle, "--"] + args); watchBottle(e)
         case .whisky(let exe):
             if let whisky = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.isaacmarovitz.Whisky") {
                 NSWorkspace.shared.open([URL(fileURLWithPath: exe)], withApplicationAt: whisky, configuration: NSWorkspace.OpenConfiguration())
             }
+            watchBottle(e)
         }
+    }
+
+    /// A bottle's game is a Wine process, not an app the workspace reports, so after Play its processes are looked for by the game's folder in their command
+    /// lines (Wine shows the Windows path, C:\...\<folder>\game.exe). The launcher it goes through (Steam in the bottle) can take a while to start it, so the
+    /// watch waits up to three minutes for it to appear; once it has, its session ends when no process of it is left. A game that closes within 15 seconds of
+    /// starting most likely does not run in Wine (a missing Windows component; ProtonDB's "borked"), and the card says so instead of counting a session.
+    private func watchBottle(_ e: ExternalGame) {
+        guard let f = e.folder, case let name = URL(fileURLWithPath: f).lastPathComponent.lowercased(), !name.isEmpty else { return }
+        let marks = ["\\" + name + "\\", "/" + name + "/"]
+        DispatchQueue.global(qos: .utility).async {
+            let asked = Date()
+            var seen: Date?
+            while true {
+                Thread.sleep(forTimeInterval: 3)
+                let up = Titles.commandLines().contains { c in marks.contains { c.contains($0) } }
+                if up, seen == nil {
+                    seen = Date()
+                    DispatchQueue.main.async { self.runningExternal.insert(e.id); self.started[e.id] = Date() }
+                }
+                if seen == nil, Date().timeIntervalSince(asked) > 180 { DispatchQueue.main.async { self.started[e.id] = nil }; return }
+                if let s = seen, !up {
+                    let secs = Date().timeIntervalSince(s)
+                    DispatchQueue.main.async {
+                        self.runningExternal.remove(e.id); self.started[e.id] = nil
+                        let t = Title(kind: .external(e))
+                        if secs < 15 { Sessions.shared.quickExit(t) }
+                        else { Stats.shared.played(key: t.statsKey, from: s); Sessions.shared.ended(t, seconds: secs) }
+                    }
+                    return
+                }
+            }
+        }
+    }
+    /// Every process's command line, lowercased
+    static func commandLines() -> [String] {
+        let p = Process(), pipe = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps"); p.arguments = ["-axww", "-o", "command="]
+        p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return [] }
+        let d = pipe.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
+        return String(decoding: d, as: UTF8.self).lowercased().split(separator: "\n").map(String.init)
     }
     private func run(_ exe: String, _ args: [String]) {
         let p = Process(); p.executableURL = URL(fileURLWithPath: exe); p.arguments = args
@@ -170,10 +212,14 @@ final class Titles: ObservableObject {
 /// A session that just ended, for the card the home shows for a few seconds
 final class Sessions: ObservableObject {
     static let shared = Sessions()
-    struct Ended: Identifiable, Equatable { let id = UUID(); let title: String; let titleID: String; let seconds: Double; let total: Double }
+    struct Ended: Identifiable, Equatable { let id = UUID(); let title: String; let titleID: String; let seconds: Double; let total: Double; var quick: String? = nil }
     @Published var last: Ended?
     func ended(_ t: Title, seconds: Double) {
         guard seconds >= 10 else { return }
         last = Ended(title: t.name, titleID: t.id, seconds: seconds, total: t.stats.seconds)
+    }
+    /// A bottle's game that closed right after it started: what runs it, for the card
+    func quickExit(_ t: Title) {
+        last = Ended(title: t.name, titleID: t.id, seconds: 0, total: t.stats.seconds, quick: t.external?.runtime?.rawValue ?? "Wine")
     }
 }

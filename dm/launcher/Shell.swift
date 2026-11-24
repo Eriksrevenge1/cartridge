@@ -194,13 +194,18 @@ struct ShellView: View {
                 Card {
                     HStack(spacing: 14) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("SESSION ENDED").font(.system(size: 11, weight: .heavy)).tracking(2).foregroundStyle(.white.opacity(0.55))
+                            Text(s.quick == nil ? "SESSION ENDED" : "CLOSED RIGHT AFTER STARTING").font(.system(size: 11, weight: .heavy)).tracking(2)
+                                .foregroundStyle(s.quick == nil ? .white.opacity(0.55) : Color.orange)
                             Text(s.title).font(.system(size: 18, weight: .bold))
-                            Text("\(Stats.duration(s.seconds)) this session · \(Stats.duration(s.total)) in total").font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
+                            if let r = s.quick {
+                                Text("It most likely doesn't run in \(r).").font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
+                            } else {
+                                Text("\(Stats.duration(s.seconds)) this session · \(Stats.duration(s.total)) in total").font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
+                            }
                         }
                     }
                 }
-                .task(id: s.id) { try? await Task.sleep(for: .seconds(6)); withAnimation { if sessions.last?.id == s.id { sessions.last = nil } } }
+                .task(id: s.id) { try? await Task.sleep(for: .seconds(s.quick == nil ? 6 : 10)); withAnimation { if sessions.last?.id == s.id { sessions.last = nil } } }
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
             if let j = builder.jobs.first(where: { $0.state == .running }) { BuildCard(job: j).onTapGesture { openWindow(id: "build") } }
@@ -441,13 +446,14 @@ struct Shelf: View {
     let add: () -> Void
     @ObservedObject private var all = Titles.shared
     var body: some View {
-        ScrollViewReader { proxy in
+        GeometryReader { geo in ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 HStack(alignment: .bottom, spacing: 24) {
                     item(nil)
                     ForEach(titles) { t in item(t).id(t.id) }
                 }
-                .padding(.horizontal, 140).padding(.top, 60).padding(.bottom, 12)
+                // room after the last cartridge to bring it to the middle too, so its name never sits under the label's music line at the right
+                .padding(.leading, 140).padding(.trailing, max(140, geo.size.width / 2 - 72)).padding(.top, 60).padding(.bottom, 12)
                 .background(alignment: .bottom) {
                     // the ledge the cartridges stand on, lit in the brand's two colours
                     Capsule().fill(LinearGradient(colors: [Brand.cyan.opacity(0), Brand.cyan.opacity(0.7), Brand.red.opacity(0.7), Brand.red.opacity(0)], startPoint: .leading, endPoint: .trailing))
@@ -457,7 +463,7 @@ struct Shelf: View {
             .scrollIndicators(.hidden)
             .onChange(of: selected) { if let s = selected { withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo(s, anchor: .center) } } }
             .onAppear { if let s = selected { proxy.scrollTo(s, anchor: .center) } }
-        }
+        } }
         .frame(height: 260)
     }
     private func item(_ t: Title?) -> some View {
