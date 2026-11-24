@@ -30,7 +30,7 @@ struct ShellView: View {
     @State private var keys: Any?
     @State private var window: NSWindow?
     /// Cartridge is the app in front: the wallpaper moves only then (60 steps a second cost the window server about a fifth of a core on an M-series Mac)
-    @State private var active = NSApp.isActive
+    @State private var active = true   // its window can be seen
 
     // MARK: what is on the shelf
 
@@ -102,6 +102,7 @@ struct ShellView: View {
         .background(WindowFinder { w in
             guard window !== w else { return }
             window = w
+            if let w { active = w.occlusionState.contains(.visible) }
             if console, let w { ConsoleWindow.fullScreen(w) }
         })
         .ignoresSafeArea()
@@ -114,8 +115,11 @@ struct ShellView: View {
         .onAppear { shelf = makeShelf(); attach(); choose(current, sound: false); for t in titles.all { details.ensure(t) } }
         .onDisappear { detach() }
         .onReceive(Timer.publish(every: 180, on: .main, in: .common).autoconnect()) { _ in if active, sheet < 0.5, let t = current { details.nextWall(t) } }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in active = true }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in active = false }
+        // the wallpaper moves while its window can be seen, in front or not (Cartridge on one screen while another app is used): only a covered or minimised
+        // window stops it, which is when its drawing would be wasted
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { n in
+            if let w = n.object as? NSWindow, w === window { active = w.occlusionState.contains(.visible) }
+        }
         .onChange(of: filter) { shelf = makeShelf(); if !shelf.contains(where: { $0.id == selected }) { choose(shelf.first) } }
         .onChange(of: titles.all.map(\.id)) { shelf = makeShelf(); if current?.id != selected { choose(current, sound: false) }; for t in titles.all { details.ensure(t) } }
         .onChange(of: titles.favorites) { if filter == "Favorites" { shelf = makeShelf() } }
@@ -329,7 +333,7 @@ struct Wallpaper: View {
 }
 
 /// A layer showing the art, filling the view, drifting slowly (a pan back and forth over 80 s); a new picture cross-fades in. The drift is stepped by a display
-/// link at 60 frames a second (20 showed its steps), only while Cartridge is in front, not left to an endless Core Animation animation: macOS composites the window at the screen's full rate for as long as such an
+/// link at 60 frames a second (20 showed its steps), only while its window can be seen, not left to an endless Core Animation animation: macOS composites the window at the screen's full rate for as long as such an
 /// animation runs (120 Hz here: a third of the window server's time for a picture that moves a point a second)
 struct WallLayer: NSViewRepresentable {
     let image: CGImage?
