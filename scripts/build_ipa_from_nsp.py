@@ -770,7 +770,7 @@ def same_build(nsp_dir, app, fam, keys, repo, env, skip=()):
         else:
             try:
                 run([nx, keys, fam['base'], upd or '-', tmp, '--manifest'] + extract_flags(app), logs / 'exefs.log',
-                    ok=(4,))   # 4: a sparse base game (Minecraft Dungeons II), readable only with its update: no main of its own
+                    ok=(4,) if upd is None else ())   # 4: the base alone has no readable main (sparse or the requested program ships only in an update)
             except BuildError:
                 # The base game alone is only a second guess: a base ExeFS that fails its hash check (Pokémon Violet Rev 4) is not used when an update supplies the code
                 if upd is not None or not ups: raise
@@ -1440,6 +1440,29 @@ def build_sources(repo, game, mods):
     src = pg.build_sources(exefs, rfs.source(game), mods)
     try: text = json.dumps(src) if key and json.loads(json.dumps(src)) == {name: list(v) for name, v in src.items()} else None   # only what reads back as it was
     except (TypeError, ValueError): text = None   # a value JSON cannot hold: found again each time
+    with contextlib.suppress(OSError):
+        if key and text: atomic_text(memo, key + '\n' + text + '\n')
+        elif key: memo.unlink(missing_ok=True)
+    return src
+
+
+def dlc_decoder_sources(repo, work, game, dlc_roms):
+    """Decoder-backed NVN archive sources across dlc_roms (profile_guess.py decoder_sources), kept in work/aoc.sources while every DLC root is an image file with unchanged
+    path, size and time, ExeFS/main is unchanged, and the readers are the same. Directory-backed DLC roots are read each time."""
+    if not dlc_roms:
+        return {'oodle_packs': (False, ''), 'ue_legacy': (False, '')}
+    main, memo, key = game / 'ExeFS/main', work / 'aoc.sources', None
+    if all(r.is_file() for r in dlc_roms):
+        imgs = [(str(r), st.st_size, st.st_mtime_ns) for r in dlc_roms for st in (r.stat(),)]
+        key = fingerprint('dlc-sources 1', imgs, ('files', [main]) if main.is_file() else None,
+                          ('files', python_tool_files(repo, 'dm/games/profile_guess.py', ('dm/games', 'dm/tools', 'dm/gfx/tools'))))
+        try:
+            k, _, text = memo.read_text().partition('\n')
+            if k == key: return {name: tuple(v) for name, v in json.loads(text).items()}
+        except (OSError, ValueError, AttributeError, TypeError): pass
+    src = pg.decoder_sources(dlc_roms, mains=[main] if main.is_file() else ())
+    try: text = json.dumps(src) if key and json.loads(json.dumps(src)) == {name: list(v) for name, v in src.items()} else None
+    except (TypeError, ValueError): text = None
     with contextlib.suppress(OSError):
         if key and text: atomic_text(memo, key + '\n' + text + '\n')
         elif key: memo.unlink(missing_ok=True)
@@ -3492,6 +3515,35 @@ def provisional_version(have, builds, requested, profile_root):
     return version
 
 
+def reconcile_provisional_marker(g, rom):
+    """Validate a provisional profile's romfs_marker against the packed program's own RomFS.
+    Keep any existing marker (including hand-edited ones); replace a missing marker (such as a sibling program's file
+    saved before 2cc4cda2) in place with the packed program's largest file, or clear it when its own RomFS is empty,
+    preserving all other settings in game.tsv."""
+    marker = g.get('romfs_marker')
+    if not marker or (rom / marker).exists():
+        return g
+    found = max(((st.st_size, name) for name, st in files_under(rom) if (rom / name).is_file()), default=None)
+    replacement = found[1] if found else ''
+    p = g.dir / 'game.tsv'
+    out, put = [], False
+    for line in p.read_text(encoding='utf-8').splitlines():
+        if not line.lstrip().startswith('#') and line.split('\t', 1)[0].strip() == 'romfs_marker':
+            if not put:
+                out.append(f'romfs_marker\t{replacement}')
+                put = True
+            continue
+        out.append(line)
+    if not put:
+        out.append(f'romfs_marker\t{replacement}')
+    atomic_text(p, '\n'.join(out) + '\n')
+    if replacement:
+        say(f'provisional profile romfs_marker {marker!r} is not in this program\'s RomFS: updated to {replacement!r}')
+    else:
+        say(f'provisional profile romfs_marker {marker!r} is not in this program\'s empty RomFS: cleared')
+    return type(g)(g.dir)
+
+
 def main(args=None):
     args = args or parse_args([])
     PROG.mode = progress_mode(args.progress or PROGRESS)
@@ -3666,6 +3718,7 @@ def main(args=None):
         say(f'derived game profile for {pkg_ver} ({disp}): {g.dir}')
     sv = versions if derived else need   # the versions whose files the shaders come from
     game = dirs[pkg_ver]
+    if provisional: g = reconcile_provisional_marker(g, rfs.source(game))
     # how the shaders are got follows from the packed version's files (profile_guess.py shader_sources): the graphics API, and the shaders made only at run time
     src = build_sources(repo, game, g.modules_in(game / 'ExeFS'))
     gfx = src['graphics'][0]   # nvn, vulkan (Hades: the host's Vulkan layer, SPIR-V shaders) or gl (Digimon Story Cyber Sleuth: the host's GL layer, GLSL sources)
@@ -3752,8 +3805,17 @@ def main(args=None):
                 cap = capture_shaders(repo, game, patched, work, env, logs, g, 'gl')
                 ios = build_gl_shaders(py, repo, roots + [cap], sh, env, logs, g, mac=mac, provisional=prov, fixed=fixed)
     else:
-        # Trinity packs and legacy Unreal paks: the split decodes them with the packed version's own decoder (Oodle, LZ5), in the Mac host built for the profile
-        oodle = (lambda: {'DM_OODLE_HOST': str(build_mac_host(repo, work / 'tools/dmhost', env, logs, g)), 'DM_OODLE_MODULES': str(patched)}) if src['oodle_packs'][0] or src['ue_legacy'][0] else None
+        # Decoder-backed archives (Trinity, PKZ, GFPAK, UE3, Frostbite, TT Games DAT, Anvil / Scimitar .forge, legacy Unreal paks):
+        # the split decodes them with the packed version's own decoder (Oodle, LZ5), in the Mac host built for the profile.
+        # Check DLC roots too when the program's own RomFS had none (The Ezio Collection's Brotherhood and Revelations keep their .forge files in DLC).
+        needs_oodle = src['oodle_packs'][0] or src['ue_legacy'][0]
+        if not needs_oodle and dlc_roms:
+            dlc_src = dlc_decoder_sources(repo, work, game, dlc_roms)
+            for k in ('oodle_packs', 'ue_legacy'):
+                if dlc_src[k][0]:
+                    say(f'DLC: {dlc_src[k][1]}')
+                    needs_oodle = True
+        oodle = (lambda: {'DM_OODLE_HOST': str(build_mac_host(repo, work / 'tools/dmhost', env, logs, g)), 'DM_OODLE_MODULES': str(patched)}) if needs_oodle else None
         own = bool(provisional or derived)   # the shader tables come from this build's split (the profile's are checked otherwise)
         def derive_shader_tables(reason):   # called only after the optional-content or additive-compute comparison passed
             nonlocal g, derived

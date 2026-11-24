@@ -69,6 +69,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [Bayonetta 3](01004A4010FEA000/README.md) | `01004A4010FEA000` | 1.2.0 | 13.3.2 | PlatinumGames' engine | NVN | — |
 | [The Binding of Isaac: Rebirth](01009BC00C38A000/README.md) | `01009BC00C38A000` | 1.0 (base) | 5.5.0 | its own engine | NVN | — |
 | [Big Brain Academy: Brain vs. Brain](0100620012D6E000/README.md) | `0100620012D6E000` | 1.2.0 | 11.4.3 | NintendoWare Bezel Engine 1.56 | NVN | — |
+| [BioShock Remastered](0100AD10102B2000/README.md) | `0100AD10102B2000` | 1.0.2 (provisional Mac profile) | 9.3.1 | Unreal Engine 3 (Blind Squirrel), Scaleform, Bink | NVN | — |
 | [Blasphemous](0100698009C6E000/README.md) | `0100698009C6E000` | 1.0.8 | 8.3.1 | Unity 2017.4.28f1 IL2CPP, FMOD | NVN | — |
 | [Blasphemous 2](010040801A4C8000/README.md) | `010040801A4C8000` | 1.0.8 | 15.3.2 | Unity 2021.3.20f1 IL2CPP, FMOD | NVN | — |
 | [Bloodstained: Curse of the Moon](01004B800AF5A000/README.md) | `01004B800AF5A000` | 1.1.1 | 4.5.0 | Inti Creates' engine | NVN | — |
@@ -267,6 +268,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [UnMetal](01008F4014A74000/README.md) | `01008F4014A74000` | 1.2.0 | 14.3.0 | Unepic Fran's own engine (`arcadix`) | OpenGL | — |
 | [Warhammer Survivors](0100CAA026246000/README.md) | `0100CAA026246000` | 1.0.0 (base) | 21.4.7 | Unity 6000.0.74f1 IL2CPP, FMOD | NVN | — |
 | [Well Dweller](0100217023F6C000/README.md) | `0100217023F6C000` | 1.0.0 | 22.2.0 | GameMaker Studio 2 (its runner) | OpenGL | — |
+| [XCOM 2 Collection](0100D0B00FB74000/README.md) | `0100D0B00FB74000` | 1.0.3 (`v131072`) | 9.3.1 | Unreal Engine 3, Wwise | NVN | Mac |
 | [Xenoblade Chronicles: Definitive Edition](0100FF500E34A000/README.md) | `0100FF500E34A000` | 1.1.2 | 9.3.1 | Monolith's engine | NVN | — |
 | [Xenoblade Chronicles 2](0100E95004038000/README.md) | `0100E95004038000` | 2.1.0 | 3.5.0 | Monolith's engine | NVN | — |
 | [Xenoblade Chronicles 3](010074F013262000/README.md) | `010074F013262000` | 2.2.1 | 12.3.9 | Monolith's engine | NVN | — |
