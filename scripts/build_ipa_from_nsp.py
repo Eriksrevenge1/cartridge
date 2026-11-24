@@ -3336,16 +3336,21 @@ def icon_file(value, option):
 
 def kept_icon(app, work):
     """The icon of the Mac app a build is about to replace, as a PNG in the work folder, for a game with no icon of its own (a dump, a NUP without one) when no icon option is given:
-    a rebuild from a terminal then keeps the icon the app had, as one from Cartridge does (it passes the old icon as --fallback-icon). None when there is no such app or icon"""
+    a rebuild from a terminal then keeps the icon the app had, as one from a front end does (it passes the old icon as --fallback-icon). None when there is no such app or icon"""
+    import plistlib
+    from xml.parsers.expat import ExpatError
     try:
-        import plistlib
-        with open(app / 'Contents/Info.plist', 'rb') as f: name = plistlib.load(f).get('CFBundleIconFile')
-    except (OSError, ValueError): return None
-    if not name: return None
-    src = app / 'Contents/Resources' / (name if name.endswith('.icns') else name + '.icns')
+        with open(app / 'Contents/Info.plist', 'rb') as f: info = plistlib.load(f)
+    except (OSError, ValueError, ExpatError): return None
+    name = info.get('CFBundleIconFile') if isinstance(info, dict) else None
+    if not isinstance(name, str) or not name or Path(name).name != name: return None
+    res = app / 'Contents/Resources'
+    src = res / name if (res / name).is_file() else res / (name if name.endswith('.icns') else name + '.icns')
     if not src.is_file(): return None
     out = work / 'kept-icon.png'
-    r = subprocess.run(['sips', '-s', 'format', 'png', str(src), '--out', str(out)], capture_output=True)
+    out.unlink(missing_ok=True)
+    try: r = subprocess.run(['sips', '-s', 'format', 'png', str(src), '--out', str(out)], capture_output=True)
+    except OSError: return None
     return out if r.returncode == 0 and out.is_file() else None
 
 
@@ -3678,11 +3683,13 @@ def main(args=None):
         except ValueError as e: raise BuildError(str(e)) from e
     app_version = app_version_of(game, None if nup else base, g, pkg_ver, nup_label, nup_base=fam['base'] if nup else None)
     if mac_pack and not (args.out or OUT_IPA): out_ipa = work.parent / f'{mac_app_name(app_name)}{"-provisional" if shadowed else ""}.app'
-    if mac_pack and not user_icon and not spare_icon and not any((d / 'icon.jpg').exists() for d in (game, base)) and out_ipa and Path(out_ipa).is_dir():
+    kept = False
+    if mac_pack and getattr(args, 'in_programs', None) is None and not user_icon and not spare_icon and not any((d / 'icon.jpg').exists() for d in (game, base)) and out_ipa and Path(out_ipa).is_dir():
         spare_icon = kept_icon(Path(out_ipa), work)
+        kept = spare_icon is not None
     icon, stand_in = app_icon(user_icon, spare_icon, game, base)
     if (not mac or mac_pack) and getattr(args, 'in_programs', None) is None:   # an app is made, once: a program packed with the application's first (in_programs) is part of its app
-        if stand_in: say(f'no game icon: the app keeps the icon it has ({Path(out_ipa).name})' if spare_icon.name == 'kept-icon.png' else f'no game icon: the app takes the fallback icon {spare_icon} (--fallback-icon / FALLBACK_ICON)')
+        if stand_in: say(f'no game icon: the app keeps the icon it has ({Path(out_ipa).name})' if kept else f'no game icon: the app takes the fallback icon {spare_icon} (--fallback-icon / FALLBACK_ICON)')
         say_game(app, app_name, app_version or '1.0', bundle_id, None if prepare_xcode else out_ipa, icon)
     # the game language: Horizon gives the game one of the languages its control data lists (the packed version's, which an update may extend), so the one packed must be among them
     control = languages_control(game, base)

@@ -22,6 +22,7 @@
 #if TARGET_OS_IPHONE
 #include <os/proc.h>   // os_proc_available_memory: for the memory readout line
 #endif
+#include "nvn_aniso.h"
 #include "nvn_mtl.h"
 #include "nvn_queue.h"
 #include <mach/mach.h>
@@ -1356,21 +1357,55 @@ static void big_moved(int i) {   // caller holds g_mu: entry i has a new index
         if (e->reach == REACH_WHOLE) b->full = i + 1; else b->chunk[(e->lo - b->a) >> 24] = i + 1;
         return; }
 }
+// Replaced pool-run ranges (mtl_pool_replace): sparse buffer-backed textures (tex_buffer / tex_linear) over the untouched part of a merged or split run must re-resolve onto the new
+// run's Metal buffer (treg_sparse_notes), without churning block-linear sparse textures whose page-table entries did not change. Under g_mu
+enum { PRUN_N = 1024 };
+static struct { uint64_t gen, lo, hi; const void *buf; } g_prun[PRUN_N];
+static _Atomic uint64_t g_prun_gen;
+static void prun_note_locked(uint64_t lo, uint64_t hi, id<MTLBuffer> buf) {   // caller holds g_mu
+    if (hi <= lo) return;
+    uint64_t gen = atomic_load_explicit(&g_prun_gen, memory_order_relaxed) + 1;
+    g_prun[gen % PRUN_N] = (typeof(g_prun[0])){gen, lo, hi, (__bridge const void *)buf};
+    atomic_store_explicit(&g_prun_gen, gen, memory_order_release);
+}
+static int prun_notes_take(uint64_t *seen, uint64_t (*out)[2], const void **bufs, int *nbufs, int max) {
+    pthread_mutex_lock(&g_mu);
+    uint64_t now = atomic_load_explicit(&g_prun_gen, memory_order_relaxed), from = *seen;
+    *seen = now;
+    if (now == from) { pthread_mutex_unlock(&g_mu); if (nbufs) *nbufs = 0; return 0; }
+    int n = 0, nb = 0;
+    if (now - from > (uint64_t)max || now - from > PRUN_N) { n = -1; nb = -1; }
+    else for (uint64_t g = from + 1; g <= now; g++) {
+        const typeof(g_prun[0]) *e = &g_prun[g % PRUN_N];
+        if (e->gen != g) { n = -1; nb = -1; break; }
+        out[n][0] = e->lo; out[n][1] = e->hi; n++;
+        if (bufs && e->buf) bufs[nb++] = e->buf;
+    }
+    pthread_mutex_unlock(&g_mu);
+    if (nbufs) *nbufs = nb;
+    return n;
+}
 // The no-copy buffer goes through deferred release (out of the residency set and unreferenced after submitted commands complete). It used to be removed only from g_keep while the residency set still held a strong reference: after the pool was freed the buffer stayed alive wrapping that guest memory,
 // and a new pool at the same address wrapped it again. Engage's title demo cycles scenes; GPU allocated grew to 5.4 GB and resident memory to 3.6 GB in 850 s.
 // In an autorelease pool of its caller's: this runs on the guest thread that finalizes the pool, whose implicit pool never drains, and adding to the weak table g_dead_pools left the buffer
 // autoreleased there, so every finalized pool buffer stayed alive for good (Ghost Trick: Phantom Detective, 125 buffers and 6.6 GB of GPU allocations 300 frames into the boot, 0 with the pool)
-static void pool_take_out(const void *mem, NSMutableArray<id<MTLBuffer>> *gone) {   // caller holds g_mu
+static void pool_take_out(const void *mem, NSMutableArray<id<MTLBuffer>> *gone, int record_run) {   // caller holds g_mu
     as_drop_pool(mem);
-    int bg = -1; for (int k = 0; k < g_nbig; k++) if (g_big[k].mem == mem) bg = k;
+    int bg = -1, noted = 0; for (int k = 0; k < g_nbig; k++) if (g_big[k].mem == mem) bg = k;
     for (int i = 0; i < g_npool; i++)
-        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf; [g_keep removeObject:b]; [gone addObject:b]; if (g_pools[i].res) g_pool_res_n--;
+        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf;
+            if (record_run) { prun_note_locked(g_pools[i].lo, g_pools[i].hi, b); noted = 1; }
+            [g_keep removeObject:b]; [gone addObject:b]; if (g_pools[i].res) g_pool_res_n--;
             if (!g_dead_pools) g_dead_pools = [NSHashTable weakObjectsHashTable];
             [g_dead_pools addObject:b]; g_pools[i] = g_pools[--g_npool]; g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);
             if (i < g_npool) big_moved(i);   // the entry moved into this place
             if (bg < 0) break;   // a large pool has an entry per chunk
             i--; }
     if (bg >= 0) {
+        if (record_run) {
+            for (id<MTLBuffer> o in g_big[bg].old) { prun_note_locked(g_big[bg].lo, g_big[bg].hi, o); noted = 1; }
+            if (!noted) prun_note_locked(g_big[bg].lo, g_big[bg].hi, nil);
+        }
         [gone addObjectsFromArray:g_big[bg].old];
         free(g_big[bg].chunk); g_big[bg] = g_big[--g_nbig]; g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1); atomic_fetch_sub(&g_big_n, 1);
     }
@@ -1393,7 +1428,7 @@ void mtl_pool_del(const void *mem) {
     reg_bump(-1, REG_POOL);
     @autoreleasepool {
     NSMutableArray<id<MTLBuffer>> *gone = [NSMutableArray array];
-    pthread_mutex_lock(&g_mu); pool_take_out(mem, gone); pool_gone_release(gone); pthread_mutex_unlock(&g_mu);
+    pthread_mutex_lock(&g_mu); pool_take_out(mem, gone, 0); pool_gone_release(gone); pthread_mutex_unlock(&g_mu);
     }
 }
 // Pools that take the place of others, in one step under g_mu: a lookup finds the old ones or the new ones, never neither. A sparse pool's mapped run is a pool of its own, replaced
@@ -1408,7 +1443,7 @@ void mtl_pool_replace(const void *const *del, int ndel, const void *const *add, 
     @autoreleasepool {
     NSMutableArray<id<MTLBuffer>> *gone = [NSMutableArray array];
     pthread_mutex_lock(&g_mu);
-    for (int i = 0; i < ndel; i++) pool_take_out(del[i], gone);
+    for (int i = 0; i < ndel; i++) pool_take_out(del[i], gone, 1);
     for (int i = 0; i < nadd; i++) pool_new_put(&n[i]);
     pool_gone_release(gone);
     pthread_mutex_unlock(&g_mu);
@@ -3113,6 +3148,7 @@ void mtl_sub_ready(uint64_t t) { g_sub_ready = t; }
 static void rt_preserve_bound(void);
 static void queue_program_preserve(void);
 static void vc_commit(void);
+static void treg_res_check(void);
 // Every commit of the submission's command buffer (mtl_sub_commit, sub_cut, mdi_wait) ends it through cb_commit, so that none misses a step: mdi_wait committed without patching the raw
 // pool table words until PR #2330. Sealed first: the transform feedback pass (its saves are blits), the blit encoder, the upload batch (its own command buffer, committed before this one) and the
 // raw pool table words of the argument blocks encoded so far (gmem_commit_patch); then the residency set. A commit whose bookkeeping must see all of that (the submission's fence and the writes
@@ -3138,6 +3174,7 @@ uint64_t mtl_sub_commit(void) {
     g_cut_copy = 0;
     own_ghost_trim();   // idle finalized textures past the ghost table's size go behind this submission's fence
     vc_commit();   // and the texture views of the textures the owner has let go, those evictions among them
+    treg_res_check();   // DM_RES_CHECK=1: check live bindless descriptor views and note their allocations for late-retire checks
     treg_finish_submission();   // Late descriptor views retire behind this submission's fence.
     rt_preserve_bound();   // The game may reuse completed command memory; queue bindings must not point into its texture snapshots.
     queue_program_preserve(); // Submitted metadata may retire while these programs remain bound.
@@ -5073,7 +5110,10 @@ static int linear_fit(const tex_t *t, uint32_t *pf, void **mb, uint64_t *mo, siz
     uint8_t swz[4]; int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
     if (!nvn_fmt_to_mtl(t->d.format, pf, swz) || !*pf || !bpb || bw != 1 || bh != 1) return 0;
     *row = tex_linear_row(t);
-    if (!mtl_addr((uint64_t)t->mem, (uint64_t)*row * (t->d.height ? t->d.height : 1), mb, mo)) { RED_ONCE(64, "linear texture storage is not in a memory pool (%ux%u format %#x)", t->d.width, t->d.height, t->d.format); return 0; }
+    if (!mtl_addr((uint64_t)t->mem, (uint64_t)*row * (t->d.height ? t->d.height : 1), mb, mo)) {
+        if (t->pool && nvn_sparse_pool(t->pool)) return -2;   // unmapped sparse run: wait for a mapping rather than falling back to a standalone private texture
+        RED_ONCE(64, "linear texture storage is not in a memory pool (%ux%u format %#x)", t->d.width, t->d.height, t->d.format); return 0;
+    }
     NSUInteger al = tbuf_align([g_dev minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)*pf]);
     if (*mo % al || *row % al) {
         static int n; if (n++ < 4) MLOG("linear texture ser=%llu %ux%u format %#x flags %#x: offset %#llx / row pitch %zu not aligned to %lu bytes (%d so far)",
@@ -5099,11 +5139,12 @@ static int linear_storage_ok(const tex_t *t) {
 }
 // Linear textures (LINEAR) in a CPU-visible pool: the game writes the pool memory directly from the CPU (SMBW's glyph cache: 2048×8192 R8, IMAGE|LINEAR, pool CPU_UNCACHED|GPU_CACHED,
 // the font engine rasterizes glyphs into it on the CPU). A GPU-private texture never sees those writes → all menu / dialog text is blank. On unified memory, create a linear texture directly on the pool buffer (zero copy): the GPU reads the current content at execution time, same as NVN.
-static id<MTLTexture> tex_linear(const tex_t *t) {
+static id<MTLTexture> tex_linear(const tex_t *t, int *unmapped) {
     uint32_t pf = 0; void *mb; uint64_t mo; size_t row;
     int fit = linear_fit(t, &pf, &mb, &mo, &row);
-    if (fit < 0) RED_ONCE(65, "linear texture %ux%u format %#x flags %#x: rows of %zu bytes no view can take, a private texture the CPU's writes do not reach (the GPU wrote its storage, or first used off the submit thread)",
-                          t->d.width, t->d.height, t->d.format, t->d.flags, row);
+    if (fit == -2) { if (unmapped) *unmapped = 1; return nil; }
+    if (fit == -1) RED_ONCE(65, "linear texture %ux%u format %#x flags %#x: rows of %zu bytes no view can take, a private texture the CPU's writes do not reach (the GPU wrote its storage, or first used off the submit thread)",
+                            t->d.width, t->d.height, t->d.format, t->d.flags, row);
     if (fit != 1) return nil;
     id<MTLBuffer> b = (__bridge id<MTLBuffer>)mb;
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:(MTLPixelFormat)pf width:t->d.width ? t->d.width : 1 height:t->d.height ? t->d.height : 1 mipmapped:NO];
@@ -5847,6 +5888,47 @@ static id<MTLTexture> tex_buffer(const tex_t *t) {
     if (!mt) RED_ONCE(39, "cannot create buffer texture: %u elements format %#x", t->d.width, t->d.format);
     return mt;
 }
+static id<MTLTexture> sparse_buf_tex_refresh(const tex_t *t, id<MTLTexture> cur, id<MTLTexture> root) {
+    // Buffer-backed textures (TARGET_BUFFER and LINEAR / LINEAR_RENDER_TARGET) in a sparse virtual pool view a mapped run's MTLBuffer directly.
+    // When vrun_set merges or splits that run (mtl_pool_replace) or remaps its pages, rebuild the view onto the new run buffer and retire the old texture,
+    // or drop it when the pages are unmapped so the replaced run buffer is released instead of staying pinned.
+    if (t->d.target == NVN_TEXTURE_TARGET_BUFFER) {
+        int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
+        void *mb = NULL; uint64_t mo = 0;
+        int mapped = bpb && t->mem && (mtl_addr((uint64_t)(uintptr_t)t->mem, (uint64_t)t->d.width * (uint64_t)bpb, &mb, &mo)
+                                       || mtl_addr((uint64_t)(uintptr_t)t->mem, 1, &mb, &mo));
+        if (!mapped) { own_drop_object(root); return nil; }
+        NSUInteger al = tbuf_view_align(root.pixelFormat);
+        if (root.buffer == (__bridge id<MTLBuffer>)mb && root.bufferOffset == mo - mo % al) return cur;
+        id<MTLTexture> fresh = tex_buffer(t);
+        if (!fresh) { own_drop_object(root); return nil; }
+        res_add(fresh);
+        own_upgrade(root, fresh, t->serial, fresh);
+        defer_obj_release(root);
+        return fresh;
+    }
+    void *mb = NULL; uint64_t mo = 0;
+    NSUInteger row = root.bufferBytesPerRow, al = tbuf_align([g_dev minimumLinearTextureAlignmentForPixelFormat:root.pixelFormat]);
+    if (!t->mem || !row || !mtl_addr((uint64_t)(uintptr_t)t->mem, (uint64_t)row * root.height, &mb, &mo) || (al && mo % al)) {
+        own_drop_object(root); return nil;
+    }
+    if (root.buffer == (__bridge id<MTLBuffer>)mb && root.bufferOffset == mo) return cur;
+    id<MTLBuffer> b = (__bridge id<MTLBuffer>)mb;
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:root.pixelFormat width:root.width height:root.height mipmapped:NO];
+    d.resourceOptions = b.resourceOptions;
+    d.usage = root.usage | (tex_atomic_capable(root) ? MTLTextureUsageShaderAtomic : 0);
+    id<MTLTexture> fresh = [b newTextureWithDescriptor:d offset:mo bytesPerRow:row];
+    if (!fresh) { own_drop_object(root); return nil; }
+    res_add(fresh);
+    id<MTLTexture> fresh_view = nil;
+    if (cur != root) {
+        fresh_view = [fresh newTextureViewWithPixelFormat:cur.pixelFormat textureType:cur.textureType levels:NSMakeRange(0, fresh.mipmapLevelCount) slices:NSMakeRange(0, fresh.arrayLength) swizzle:cur.swizzle];
+        if (!fresh_view) { defer_obj_release(fresh); own_drop_object(root); return nil; }
+    }
+    own_upgrade(root, fresh, t->serial, fresh_view ? fresh_view : fresh);
+    defer_obj_release(root);
+    return fresh_view ? fresh_view : fresh;
+}
 static void *tex_mtl_resolve(const tex_t *ct, int *in_storage, id<MTLTexture> __strong *owned) {
     tex_t *t = (tex_t *)ct;
     if (!t || !t->serial) return NULL;
@@ -5887,7 +5969,7 @@ static void *tex_mtl_resolve(const tex_t *ct, int *in_storage, id<MTLTexture> __
     if (!packaged && !have && on_sub_thread() && tex_cpu_content(t)) { mtl_tex_cpu_written(t); packaged = 1; }   // storage the CPU wrote before its first use (tex_cpu_content)
     if (!packaged && !have && on_sub_thread() && linear_storage_ok(t)) {   // a linear texture no view on its buffer can take (iOS wants 64-byte rows; Axiom Verge's 8x8 RGBA8 linear textures have 32): uploaded, and again after CPU writes
         uint32_t pf; void *mb; uint64_t mo; size_t row;
-        if (linear_fit(t, &pf, &mb, &mo, &row) < 0) {
+        if (linear_fit(t, &pf, &mb, &mo, &row) == -1) {
             if (linear_gpu_may_write(t)) cpu_unc_take(t);   // the GPU's first write into its storage makes it a GPU texture (cpu_unc_drop)
             mtl_tex_cpu_written(t); packaged = 1;
         }
@@ -5979,26 +6061,17 @@ static void *tex_mtl_resolve(const tex_t *ct, int *in_storage, id<MTLTexture> __
         static int nstale; if (nstale++ < 4) MLOG("stale sRGB / linear view dropped ser=%llu format %lu (%d so far)", (unsigned long long)t->serial, (unsigned long)((id<MTLTexture>)have).pixelFormat, nstale);
         have = nil;
     }
-    if (!have && t->d.target == NVN_TEXTURE_TARGET_BUFFER) { alias_key key = tex_alias_key(t); have = own_alias_take(t->serial, &key); }
-    if (have && !off && t->d.target == NVN_TEXTURE_TARGET_BUFFER && t->pool && nvn_sparse_pool(t->pool)) {
-        // treg_sparse_notes invalidates the registered views, but a BUFFER's
-        // serial and sharing entry still name its previous physical mapping.
-        // Refresh only when that mapping changed; queued consumers keep the old view.
-        void *mb = NULL; uint64_t mo = 0;
-        int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
-        if (!mtl_addr((uint64_t)(uintptr_t)t->mem, (uint64_t)t->d.width * (uint64_t)bpb, &mb, &mo)) return NULL;
-        id<MTLTexture> root = have; while (root.parentTexture) root = root.parentTexture;
-        NSUInteger al = tbuf_view_align(root.pixelFormat);
-        if (root.buffer != (__bridge id<MTLBuffer>)mb || root.bufferOffset != mo - mo % al) {
-            id<MTLTexture> fresh = tex_buffer(t); if (!fresh) return NULL;
-            res_add(fresh);
-            own_upgrade(have, fresh, t->serial, fresh); have = fresh;
+    alias_key ak = tex_alias_key(t);
+    if (!have) have = own_alias_take(t->serial, &ak);   // found and published in one hold (nvn_owner.m)
+    if (have && !off && t->pool && nvn_sparse_pool(t->pool) && obj_is_tex(have)) {
+        id<MTLTexture> cur = (id<MTLTexture>)have, root = cur;
+        while (root.parentTexture) root = root.parentTexture;
+        if (root.buffer) {
+            have = sparse_buf_tex_refresh(t, cur, root);
+            if (!have) return NULL;
         }
     }
     if (have) { if (!off && t->pool && nvn_sparse_pool(t->pool)) sparse_gpu_look(t, have); if (!g_pool_walk) tu_stamp(have, 0); return tex_mtl_result(have, owned); }   // its mappings are synced on the submit thread (sparse_sync)
-    alias_key ak = tex_alias_key(t);
-    id shared = own_alias_take(t->serial, &ak);   // found and published in one hold (nvn_owner.m)
-    if (shared) { if (!g_pool_walk) tu_stamp(shared, 0); return tex_mtl_result(shared, owned); }
     // A buffer texture's view is shared by storage as every other texture is: NVN texture objects over the same range with the same description are one view, kept by the sharing
     // table. Made per object, Unreal's transient buffer textures, built again every frame over the same ranges, added a view to the residency set each time: FINAL FANTASY
     // RESONANCE added and removed about 79,000 every 300 frames on an iPhone (0.8 ms of residency commits a frame), and their finalized objects (about 175 a frame) wrapped the
@@ -6035,7 +6108,9 @@ static void *tex_mtl_resolve(const tex_t *ct, int *in_storage, id<MTLTexture> __
     // Made here, its host texture would be filled from neither (tex_init_fill and tex_zero_fill are the submit thread's), and it would keep it: its first use on the submit thread,
     // which decides whether it is taken from its storage (tex_cpu_content), would never come
     if (off && in_storage && tex_storage_readable(t)) { *in_storage = 1; return NULL; }
-    id<MTLTexture> mt = tex_linear(t); int tu = 0;
+    int lin_unmapped = 0;
+    id<MTLTexture> mt = tex_linear(t, &lin_unmapped); int tu = 0;
+    if (lin_unmapped) return NULL;
     if (!mt && t->pool && nvn_sparse_pool(t->pool)) mt = sparse_gpu_make(t);   // a large one in a sparse pool: only the tiles the game maps take memory
     if (!mt) {
         MTLTextureDescriptor *d = tex_desc(t, 0);
@@ -8002,20 +8077,32 @@ static inline uint64_t treg_ep(void) { if (g_ser_gen != g_ser_synced) ser_sync()
 // mappings made before it (sparse_checked), so those made during its replay are noted at the next one. Before, once any sparse mapping existed, every serial change sent every ID
 // down the slow path and built every texture pool table whole, and a mapping change with no serial change in between was not seen at all (PR #1721, NicholasDominici)
 static int *g_treg_sp; static size_t g_ntreg_sp, g_treg_sp_cap;   // the IDs registered with a texture of a sparse pool (treg_t.sp; one that no longer holds one leaves at the next note), under g_rmu
-static uint64_t g_sp_noted;   // the mapping generation noted so far (the submit thread)
+static uint64_t g_sp_noted, g_prun_noted;   // the mapping and pool-run-replacement generations noted so far (the submit thread)
+static void tb2_gone_drop_bufs(const void *const *bufs, int nb);
 static void treg_sparse_notes(void) {
-    if (nvn_sparse_gen() == g_sp_noted) return;
-    enum { NOTES = 4096 }; static uint64_t (*r)[2], *ser; static size_t ser_cap;
+    uint64_t sg_now = nvn_sparse_gen();
+    uint64_t pg_now = atomic_load_explicit(&g_prun_gen, memory_order_acquire);
+    if (sg_now == g_sp_noted && pg_now == g_prun_noted) return;
+    enum { NOTES = 4096 }; static uint64_t (*r)[2], (*pr)[2], *ser; static const void *pbufs[PRUN_N]; static size_t ser_cap;
     if (!r) r = realloc_or_die(NULL, NOTES * sizeof *r, "the sparse mapping notes");
-    int n = nvn_sparse_notes(&g_sp_noted, r, NOTES), m = 0;   // n < 0: too many to look at, every sparse texture is noted
+    if (!pr) pr = realloc_or_die(NULL, PRUN_N * sizeof *pr, "the sparse run notes");
+    int n = sg_now != g_sp_noted ? nvn_sparse_notes(&g_sp_noted, r, NOTES) : 0, m = 0;   // n < 0: too many to look at, every sparse texture is noted
     if (n > 0) {   // sorted and joined: disjoint ranges in order, so the first that ends past a texture's start is the only one that can overlap it
         qsort(r, (size_t)n, sizeof r[0], sp_cmp);
         for (int k = 1; k < n; k++) { if (r[k][0] <= r[m][1]) { if (r[k][1] > r[m][1]) r[m][1] = r[k][1]; } else { m++; r[m][0] = r[k][0]; r[m][1] = r[k][1]; } }
         m++;
     }
-    if (!n) return;
+    int npb = 0;
+    int pn = pg_now != g_prun_noted ? prun_notes_take(&g_prun_noted, pr, pbufs, &npb, PRUN_N) : 0, pm = 0;
+    if (pn > 0) {
+        qsort(pr, (size_t)pn, sizeof pr[0], sp_cmp);
+        for (int k = 1; k < pn; k++) { if (pr[k][0] <= pr[pm][1]) { if (pr[k][1] > pr[pm][1]) pr[pm][1] = pr[k][1]; } else { pm++; pr[pm][0] = pr[k][0]; pr[pm][1] = pr[k][1]; } }
+        pm++;
+    }
+    if (!n && !pn) return;
     size_t ns = 0, w = 0;
     os_unfair_lock_lock(&g_rmu);
+    if (pn) tb2_gone_drop_bufs(pbufs, npb);
     for (size_t i = 0; i < g_ntreg_sp; i++) {
         int id_ = g_treg_sp[i]; treg_t *rp = &g_treg[id_];
         // Pool finalization marks its descriptors gone under g_rmu before the object may be freed.
@@ -8023,7 +8110,12 @@ static void treg_sparse_notes(void) {
         g_treg_sp[w++] = id_;
         uint64_t lo = (uint64_t)(uintptr_t)rp->t.mem, hi = lo + rp->t.L.size;
         int hit = n < 0;
-        if (!hit) { int a = 0, b = m; while (a < b) { int c = (a + b) / 2; if (r[c][1] <= lo) a = c + 1; else b = c; } hit = a < m && r[a][0] < hi; }
+        if (!hit && m) { int a = 0, b = m; while (a < b) { int c = (a + b) / 2; if (r[c][1] <= lo) a = c + 1; else b = c; } hit = a < m && r[a][0] < hi; }
+        int buf_backed = rp->t.d.target == NVN_TEXTURE_TARGET_BUFFER || (rp->t.d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET));
+        if (!hit && buf_backed && pn) {
+            if (pn < 0) hit = 1;
+            else { int a = 0, b = pm; while (a < b) { int c = (a + b) / 2; if (pr[c][1] <= lo) a = c + 1; else b = c; } hit = a < pm && pr[a][0] < hi; }
+        }
         if (!hit) continue;
         if (rp->stand_no == STAND_WAIT) rp->stand_no = 0;   // a stand-in refused for an unmapped page: looked at again (stand_make_)
         if (!rp->t.serial) continue;
@@ -8079,6 +8171,24 @@ static void treg_retire_serial(uint64_t ser) {
     os_unfair_lock_lock(&g_rmu);
     for (int n = (int)(uintptr_t)nvn_hm_get(&g_treg_serial, &ser); n; n = g_treg[n - 1].next) {
         treg_t *r = &g_treg[n - 1]; r->retired = 1; treg_drop_views(r);
+    }
+    os_unfair_lock_unlock(&g_rmu);
+}
+static void treg_res_check(void) {
+    if (!g_res_check_on) return;
+    os_unfair_lock_lock(&g_rmu);
+    uint64_t ep = treg_ep();
+    for (int i = 1; i < g_ntreg; i++) {
+        treg_t *r = &g_treg[i];
+        if (!r->ok || r->gone) continue;
+        if (r->stand) res_check((__bridge id)r->stand, "treg.stand", i);
+        if (!r->view || r->view_ser != ep) continue;
+        id<MTLTexture> v = (__bridge id<MTLTexture>)r->view;
+        res_check(v, "treg.view", i);
+        if (r->alt && r->alt_of == r->view) res_check((__bridge id)r->alt, "treg.alt", i);
+        if (r->im && r->im_of == r->view) res_check((__bridge id)r->im, "treg.im", i);
+        id<MTLTexture> root = v; while (root.parentTexture) root = root.parentTexture;
+        for (int k = 0; k < 4; k++) if (r->palt[k] && r->palt_of[k] == (__bridge void *)root) res_check((__bridge id)r->palt[k], "treg.palt", i);
     }
     os_unfair_lock_unlock(&g_rmu);
 }
@@ -8224,7 +8334,22 @@ static MTLPixelFormat tbuf_view_format(MTLPixelFormat pf, int dpf) {
 // menus, which read finalized textures' rows only (114,091 binds to frame 5,100 made 40,308 views; kept with the texture, 169,774 made 788)
 enum { TB2_WAYS = 1024 };
 static struct { void *buf; uint64_t off, n, vf, rid; void *v; } g_tb2_gone[TB2_WAYS];
-static void tb2_gone_clear(void) { for (int i = 0; i < TB2_WAYS; i++) if (g_tb2_gone[i].v) { defer_obj_release((__bridge id)g_tb2_gone[i].v); CFRelease(g_tb2_gone[i].v); memset(&g_tb2_gone[i], 0, sizeof g_tb2_gone[i]); } }
+static int g_tb2_gone_n;
+static void tb2_gone_clear(void) {
+    for (int i = 0; i < TB2_WAYS; i++) if (g_tb2_gone[i].v) { defer_obj_release((__bridge id)g_tb2_gone[i].v); CFRelease(g_tb2_gone[i].v); memset(&g_tb2_gone[i], 0, sizeof g_tb2_gone[i]); }
+    g_tb2_gone_n = 0;
+}
+static void tb2_gone_drop_bufs(const void *const *bufs, int nb) {   // caller holds g_rmu
+    if (!g_tb2_gone_n) return;
+    if (nb < 0) { tb2_gone_clear(); return; }
+    for (int i = 0; i < TB2_WAYS && nb > 0; i++) {
+        if (!g_tb2_gone[i].v) continue;
+        for (int j = 0; j < nb; j++) if (g_tb2_gone[i].buf == bufs[j]) {
+            defer_obj_release((__bridge id)g_tb2_gone[i].v); CFRelease(g_tb2_gone[i].v); memset(&g_tb2_gone[i], 0, sizeof g_tb2_gone[i]); g_tb2_gone_n--;
+            break;
+        }
+    }
+}
 static id<MTLTexture> tbuf_as_2d(int tid, id<MTLTexture> t, int dpf, uint64_t *rid, uint32_t *bias) {
     if (tid <= 0 || tid >= g_ntreg || !g_treg[tid].ok) return nil;
     const tex_t *tt = &g_treg[tid].t; MTLPixelFormat vf = tbuf_view_format(t.pixelFormat, dpf);
@@ -8262,6 +8387,7 @@ static id<MTLTexture> tbuf_as_2d(int tid, id<MTLTexture> t, int dpf, uint64_t *r
     if ((s = vc_set_for(root, tt->pool))) { vc_rows_drop(s); s->rows = (void *)CFBridgingRetain(v); s->rows_rid = *rid; s->rows_n = gn; }
     else {   // a texture the owner no longer holds: kept by what they view, which descriptors of other textures over the same memory share
         if (g_tb2_gone[gi].v) { defer_obj_release((__bridge id)g_tb2_gone[gi].v); CFRelease(g_tb2_gone[gi].v); }
+        else g_tb2_gone_n++;
         g_tb2_gone[gi].buf = gbuf; g_tb2_gone[gi].off = goff; g_tb2_gone[gi].n = gn; g_tb2_gone[gi].vf = gvf; g_tb2_gone[gi].rid = *rid; g_tb2_gone[gi].v = (void *)CFBridgingRetain(v);
     }
     return v;
@@ -8482,16 +8608,16 @@ static void *tex_by_id_ref(int tid) {
     // Guest writes (nvn_dirty_now) matter only to CPU-written textures: a texture that becomes CPU-written later bumps g_ser_gen once (mtl_tex_cpu_written), which sends its ID through here again.
     // Before, every guest write to any protected page sent every texture ID, render targets included, down this path
     rp->view_pkg = (rp->t.has_layout || tex_cpu_written(&rp->t)) && rp->t.mem;
+    id<MTLTexture> base = nil;
     if (v) {   // The serial table or guest memory has changed: check whether the base texture was re-uploaded and replaced; if so the view is invalidated
-        id<MTLTexture> cur = treg_tex(rp);
-        // cur is nil when the ID has no texture now (a gone texture not made again, a texture that could not be made): a cached base texture has no parent either, so nil == nil
+        base = treg_tex(rp);
+        // base is nil when the ID has no texture now (a gone texture not made again, a texture that could not be made): a cached base texture has no parent either, so nil == nil
         // used to keep the cached texture and mark it valid again, and the fast paths (tex_fast_rid) gave the pool tables its resource ID after the host had released it and dropped
         // its residency: GPU page faults in the shaders that sample it (docs/reference/rendering.md, "A texture ID with no texture kept its cached view")
-        if (cur && (cur == v || v.parentTexture == cur)) { rp->view_ser = sg; rp->view_dirty = dg; treg_pkg_stamp(rp, cur); return rp->view; }
+        if (base && (base == v || v.parentTexture == base)) { rp->view_ser = sg; rp->view_dirty = dg; treg_pkg_stamp(rp, base); return rp->view; }
         defer_obj_unref(v); CFRelease(rp->view); rp->view = NULL; rp->view_rid = 0; rp->view_pf = 0; rp->view_tt = 0; v = nil;
-    }
+    } else base = treg_tex(rp);
     treg_t r = *rp;
-    id<MTLTexture> base = treg_tex(rp);
     if (!base) { if (rp->gone) { static uint64_t n; if (n++ < 4) MLOG("texture ID %d read after its memory pool was finalized ser=%llu %ux%u format %#x: treated as an empty slot (%llu so far)", tid, (unsigned long long)rp->t.serial, rp->t.d.width, rp->t.d.height, rp->t.d.format, (unsigned long long)n); } return NULL; }
     v = base;
     // Channel swizzle: the view's if set, otherwise the one from texture building; identity builds no view (SMBW's font cache is (1 1 1 R): without the swizzle glyphs become white blocks).
@@ -8840,7 +8966,13 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     d.sAddressMode = wrapm(p.ws); d.tAddressMode = wrapm(p.wt); d.rAddressMode = wrapm(p.wr);
     d.lodMinClamp = p.lod_min < 0 ? 0 : p.lod_min; d.lodMaxClamp = p.lod_max;
     d.lodBias = p.lod_bias < -16 ? -16 : p.lod_bias > 15.99f ? 15.99f : p.lod_bias;   // SetLodBias: Maxwell's sampler bias, Metal 26's range [-16, 15.99]
-    d.maxAnisotropy = p.aniso < 1 ? 1 : p.aniso > 16 ? 16 : (NSUInteger)p.aniso;
+    static int aniso_floor = -1;
+    if (aniso_floor < 0) {
+        aniso_floor = nvn_aniso_env(getenv("DM_NVN_ANISO"));
+        if (aniso_floor) MLOG("DM_NVN_ANISO: surface samplers filter with anisotropy %d or more", aniso_floor);
+    }
+    float aniso = nvn_aniso_floor(p.minf, p.magf, p.cmp_mode, p.reduction, p.lod_min, p.lod_max, p.aniso, aniso_floor);
+    d.maxAnisotropy = aniso < 1 ? 1 : aniso > 16 ? 16 : (NSUInteger)aniso;
     if (p.cmp_mode) d.compareFunction = (MTLCompareFunction)(p.cmp_func - 1);
     // Reduction (NVN 1 min / 2 max): the minimum or maximum of the texels a filtered sample covers, per channel (Metal 26). Pokémon Legends: Z-A builds its depth pyramid with a min sampler
     // (151607c7a92386cc reads the level above at an explicit LOD) and tests occlusion boxes against it; averaged, the pyramid is nearer than the scene at depth edges. Metal ignores the reduction
@@ -10631,6 +10763,25 @@ static dispatch_queue_t g_arch_q; static _Atomic int g_arch_new, g_arch_new_vd, 
 // with the front end at -O2: 33.7 minutes until Metal gave up, GitHub issue #294) held the flush, and the flush every compile and draw that came after it. Now such a compile
 // holds back the file of its own period and nothing else
 static _Atomic uint64_t g_arch_deaths;   // all unwritten periods predating a compiler-service death are untrusted, including ones already handed over
+static _Atomic uint64_t g_arch_discarded;   // periods discarded by arch_write_file (compiler death, unresolved plain compile, write/index failure)
+// Offline packaging capture ledger (active only when g_pre_tool or g_pre_out is set; zero runtime overhead in play).
+// Tracks requested capture keys, retains descriptors only until their period writes cleanly, retries lost keys in fresh
+// periods after the serialization gate is released, and distinguishes permanently rejected pipelines from compiler-service loss.
+enum ArchPkgState {
+    ARCH_PKG_PENDING = 0,
+    ARCH_PKG_WRITTEN,
+    ARCH_PKG_LOST_BUILDABLE,
+    ARCH_PKG_LOST_UNCONFIRMED,
+    ARCH_PKG_REJECTED,
+};
+@interface ArchPkgItem : NSObject { @public uint64_t key; MTL4PipelineDescriptor *desc; int vd, compute, state, retries; NSString *reason; } @end
+@implementation ArchPkgItem @end
+enum { ARCH_PKG_MAX_RETRIES = 3 };
+static os_unfair_lock g_pkg_lock = OS_UNFAIR_LOCK_INIT;
+static NSMutableDictionary<NSNumber *, ArchPkgItem *> *g_pkg_items;
+static _Atomic int g_pkg_unkeyed_lost;
+static int g_arch_pkg_max_retries = ARCH_PKG_MAX_RETRIES;
+static int g_pkg_last_requested, g_pkg_last_published, g_pkg_last_recovered, g_pkg_last_missing_lost, g_pkg_last_missing_died, g_pkg_last_rejected, g_pkg_last_rounds;
 @interface ArchEpoch : NSObject { @public id<MTL4Compiler> comp; id<MTL4PipelineDataSetSerializer> ser; dispatch_group_t busy; _Atomic int active, n, vd, cs, ms, failed, crashed; int compacting; uint64_t deaths;
     NSMutableData *keys; os_unfair_lock klock; _Atomic int unkeyed; } @end
 // n: pipelines captured; vd, cs, ms: those of them that are bases with a vertex layout, compute pipelines, native mesh pipelines; failed: a capture in it failed (arch_cap_failed); crashed: the compiler service died
@@ -11324,6 +11475,62 @@ static void fn_gave_up(const char *what) {   // a capture's wait ran out: it is 
         MLOG("pipeline archive: a %s capture waited %d ms for another of the same shader function: built without the archive (Metal crashes on two at once, fn_claim); "
              "the prebuild tool's last line counts them", what, g_fn_wait_ms);
 }
+static int arch_pkg_on(void) { return g_pre_tool || g_pre_out != nil; }
+static void arch_pkg_reset(void) {
+    os_unfair_lock_lock(&g_pkg_lock);
+    g_pkg_items = nil;
+    os_unfair_lock_unlock(&g_pkg_lock);
+    atomic_store(&g_pkg_unkeyed_lost, 0);
+    g_pkg_last_requested = g_pkg_last_published = g_pkg_last_recovered = g_pkg_last_missing_lost = g_pkg_last_missing_died = g_pkg_last_rejected = g_pkg_last_rounds = 0;
+}
+static void arch_pkg_note_entered(MTL4PipelineDescriptor *d, int vd, int compute) {
+    uint64_t k = arch_key(d);
+    if (!k) return;
+    MTL4PipelineDescriptor *copy = [d copy];
+    os_unfair_lock_lock(&g_pkg_lock);
+    if (!g_pkg_items) g_pkg_items = [NSMutableDictionary dictionary];
+    ArchPkgItem *it = g_pkg_items[@(k)];
+    if (!it) { it = [ArchPkgItem new]; it->key = k; g_pkg_items[@(k)] = it; }
+    if (it->state != ARCH_PKG_WRITTEN) {
+        it->state = ARCH_PKG_PENDING; it->vd = vd; it->compute = compute;
+        if (!it->desc) it->desc = copy;
+    }
+    os_unfair_lock_unlock(&g_pkg_lock);
+}
+static void arch_pkg_note_fallback(MTL4PipelineDescriptor *d, int vd, int compute, int built, NSError *ce, NSError *pe) {
+    uint64_t k = arch_key(d);
+    int state = built ? ARCH_PKG_LOST_BUILDABLE : err_compiler_died(pe) ? ARCH_PKG_LOST_UNCONFIRMED : pe ? ARCH_PKG_REJECTED : err_compiler_died(ce) ? ARCH_PKG_LOST_UNCONFIRMED : ARCH_PKG_REJECTED;
+    if (!k) { if (state != ARCH_PKG_REJECTED) atomic_fetch_add(&g_pkg_unkeyed_lost, 1); return; }
+    MTL4PipelineDescriptor *copy = state == ARCH_PKG_REJECTED ? nil : [d copy];
+    NSString *why = pe.localizedDescription ?: ce.localizedDescription;
+    os_unfair_lock_lock(&g_pkg_lock);
+    if (!g_pkg_items) g_pkg_items = [NSMutableDictionary dictionary];
+    ArchPkgItem *it = g_pkg_items[@(k)];
+    if (!it) { it = [ArchPkgItem new]; it->key = k; g_pkg_items[@(k)] = it; }
+    if (it->state != ARCH_PKG_WRITTEN) {
+        it->state = state; it->vd = vd; it->compute = compute;
+        if (state == ARCH_PKG_REJECTED) it->desc = nil;
+        else if (!it->desc) it->desc = copy;
+        if (why) it->reason = why;
+    }
+    os_unfair_lock_unlock(&g_pkg_lock);
+}
+static void arch_pkg_period_done(ArchEpoch *ep, int ok) {
+    if (!arch_pkg_on()) return;
+    if (!ok && atomic_load(&ep->unkeyed)) atomic_fetch_add(&g_pkg_unkeyed_lost, 1);
+    NSData *keys = ep->keys;
+    if (!keys.length) return;
+    const uint64_t *kv = keys.bytes; NSUInteger nk = keys.length / sizeof(uint64_t);
+    os_unfair_lock_lock(&g_pkg_lock);
+    for (NSUInteger i = 0; i < nk; i++) {
+        ArchPkgItem *it = g_pkg_items[@(kv[i])];
+        if (!it || it->state == ARCH_PKG_WRITTEN) continue;
+        if (ok) { it->state = ARCH_PKG_WRITTEN; it->desc = nil; }
+        else it->state = ARCH_PKG_LOST_BUILDABLE;
+    }
+    os_unfair_lock_unlock(&g_pkg_lock);
+}
+static int arch_pkg_recover(void);
 // A compile the archive captures, in the current flush period, counted there when it built (d: a base, or a native mesh pipeline (mtk_build); vd: the base has a vertex layout; *captured: it is in the period). No task options: a
 // captured base never imports archive entries (see the compaction crash below). One the capture refuses is built by the plain compiler (arch_cap_failed); a pipeline both refuse
 // returns the plain compiler's error, or the capture's when it gave none. wait_ms: how long it waits for its functions (fn_claim); busy (the prebuild): a capture that could not
@@ -11331,12 +11538,20 @@ static void fn_gave_up(const char *what) {   // a capture's wait ran out: it is 
 static id<MTLRenderPipelineState> arch_capture_try(MTL4PipelineDescriptor *d, NSError **e, int vd, int *captured, int wait_ms, int *busy) {
     if (captured) *captured = 0;
     if (busy) *busy = 0;
-    if (!arch_capturing()) return plain_rps(d, e);
+    if (!arch_capturing()) {
+        NSError *pe = nil; id<MTLRenderPipelineState> ps = plain_rps(d, &pe);
+        if (e && pe) *e = pe;
+        if (arch_pkg_on()) arch_pkg_note_fallback(d, vd, 0, ps != nil, nil, pe);
+        return ps;
+    }
     uint64_t fk[3]; int fn = fn_ids(d, fk);
     if (!fn_claim(fk, fn, wait_ms)) {
         if (busy) { *busy = 1; return nil; }
         fn_gave_up("render");
-        return plain_rps(d, e);
+        NSError *pe = nil; id<MTLRenderPipelineState> ps = plain_rps(d, &pe);
+        if (e && pe) *e = pe;
+        if (arch_pkg_on()) arch_pkg_note_fallback(d, vd, 0, ps != nil, nil, pe);
+        return ps;
     }
     ser_compile_begin(); ArchEpoch *ep = ep_enter(); NSError *ce = nil;
     id<MTLRenderPipelineState> ps = [ep->comp newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:&ce];
@@ -11344,35 +11559,49 @@ static id<MTLRenderPipelineState> arch_capture_try(MTL4PipelineDescriptor *d, NS
     if (!ps && err_compiler_died(ce)) { atomic_store(&ep->crashed, 1); arch_died(ce); }
     fn_release(fk, fn);
     int full = 0;
-    if (ps) { ep_key(ep, d); atomic_fetch_add(&g_arch_new, 1); if (vd) { atomic_fetch_add(&ep->vd, 1); atomic_fetch_add(&g_arch_new_vd, 1); }
+    if (ps) { ep_key(ep, d); if (arch_pkg_on()) arch_pkg_note_entered(d, vd, 0);
+              atomic_fetch_add(&g_arch_new, 1); if (vd) { atomic_fetch_add(&ep->vd, 1); atomic_fetch_add(&g_arch_new_vd, 1); }
               if ([d isKindOfClass:MTL4MeshRenderPipelineDescriptor.class]) atomic_fetch_add(&ep->ms, 1);
               full = atomic_fetch_add(&ep->n, 1) + 1 == g_arch_period_max; }
     ep_leave(ep); ser_compile_end();
     if (ps) { if (captured) *captured = 1; if (full) arch_flush_from(ep); return ps; }
-    ps = plain_rps(d, e);
+    NSError *pe = nil; ps = plain_rps(d, &pe);
+    if (e && pe) *e = pe;
     if (ps && !atomic_load(&ep->crashed)) arch_cap_failed(ep, ce, "render"); else if (!ps && e && !*e) *e = ce;
+    if (arch_pkg_on()) arch_pkg_note_fallback(d, vd, 0, ps != nil, ce, pe);
     return ps;
 }
 static id<MTLRenderPipelineState> arch_capture(MTL4PipelineDescriptor *d, NSError **e, int vd, int *captured) { return arch_capture_try(d, e, vd, captured, g_fn_wait_ms, NULL); }
 // The same for a compute pipeline (cps_new). It counts as a base with a vertex layout does: its file is a plain one, never a p<seq> file, so its lookups skip the prebuild's files
 static id<MTLComputePipelineState> arch_capture_cs(MTL4ComputePipelineDescriptor *d, NSError **e, int *captured) {
     if (captured) *captured = 0;
-    if (!arch_capturing()) return plain_cps(d, e);
+    if (!arch_capturing()) {
+        NSError *pe = nil; id<MTLComputePipelineState> ps = plain_cps(d, &pe);
+        if (e && pe) *e = pe;
+        if (arch_pkg_on()) arch_pkg_note_fallback(d, 0, 1, ps != nil, nil, pe);
+        return ps;
+    }
     uint64_t fk[3]; int fn = fn_ids(d, fk);
     if (!fn_claim(fk, fn, g_fn_wait_ms)) {
         fn_gave_up("compute");
-        return plain_cps(d, e);
+        NSError *pe = nil; id<MTLComputePipelineState> ps = plain_cps(d, &pe);
+        if (e && pe) *e = pe;
+        if (arch_pkg_on()) arch_pkg_note_fallback(d, 0, 1, ps != nil, nil, pe);
+        return ps;
     }
     ser_compile_begin(); ArchEpoch *ep = ep_enter(); NSError *ce = nil;
     id<MTLComputePipelineState> ps = [ep->comp newComputePipelineStateWithDescriptor:d compilerTaskOptions:nil error:&ce];
     if (!ps && err_compiler_died(ce)) { atomic_store(&ep->crashed, 1); arch_died(ce); }
     fn_release(fk, fn);
     int full = 0;
-    if (ps) { ep_key(ep, d); atomic_fetch_add(&g_arch_new, 1); atomic_fetch_add(&ep->cs, 1); full = atomic_fetch_add(&ep->n, 1) + 1 == g_arch_period_max; }
+    if (ps) { ep_key(ep, d); if (arch_pkg_on()) arch_pkg_note_entered(d, 0, 1);
+              atomic_fetch_add(&g_arch_new, 1); atomic_fetch_add(&ep->cs, 1); full = atomic_fetch_add(&ep->n, 1) + 1 == g_arch_period_max; }
     ep_leave(ep); ser_compile_end();
     if (ps) { if (captured) *captured = 1; if (full) arch_flush_from(ep); return ps; }
-    ps = plain_cps(d, e);
+    NSError *pe = nil; ps = plain_cps(d, &pe);
+    if (e && pe) *e = pe;
     if (ps && !atomic_load(&ep->crashed)) arch_cap_failed(ep, ce, "compute"); else if (!ps && e && !*e) *e = ce;
+    if (arch_pkg_on()) arch_pkg_note_fallback(d, 0, 1, ps != nil, ce, pe);
     return ps;
 }
 // Metal opens a pipeline archive through NSData with "mapped if safe", and Foundation takes a file on an external drive as not safe: it reads it into memory, whole and for the whole run (docs/reference/memory.md). newArchiveWithURL has no option for this, so while the host
@@ -11590,6 +11819,8 @@ static void arch_write_file(ArchEpoch *ep, int gate_held) {
     int crashed = atomic_load(&ep->crashed) || ep->deaths != atomic_load(&g_arch_deaths);
     if (crashed || plain) {
         ser_end();
+        atomic_fetch_add(&g_arch_discarded, 1);
+        arch_pkg_period_done(ep, 0);
         atomic_fetch_sub(&g_arch_new, n); atomic_fetch_sub(&g_arch_new_vd, vd);
         if (ep->compacting) g_compact_bad = 1;   // the old files keep the bases this period would have held
         if (crashed) MLOG("[RED] pipeline archive: a flush period the compiler service died in is not written (%d pipelines: %d bases, %d compute, %d task / mesh); they are captured again at a later start",
@@ -11610,6 +11841,8 @@ static void arch_write_file(ArchEpoch *ep, int gate_held) {
     NSString *kp = arch_keys_path(path); int keyed = ok && arch_keys_write(kp, ep->keys, !atomic_load(&ep->unkeyed));
     ok = ok && !rename(tmp.fileSystemRepresentation, path.fileSystemRepresentation);
     if (!ok && keyed) unlink(kp.fileSystemRepresentation);
+    if (!ok || !keyed) atomic_fetch_add(&g_arch_discarded, 1);
+    arch_pkg_period_done(ep, ok && keyed);
     if (!ok) { MLOG("[RED] pipeline archive: writing %s failed%s%s", path.UTF8String, e ? ": " : "", e ? e.localizedDescription.UTF8String : ""); unlink(tmp.fileSystemRepresentation); if (ep->compacting) g_compact_bad = 1; }
     else {
         MLOG("pipeline archive: %d new pipeline bases%s%s written to %s (%.1f MB, %.0f ms; compiles held back by the writes so far: %llu, %.0f ms in all)", n - cs - ms,
@@ -11646,7 +11879,8 @@ static int arch_hand_over(ArchEpoch *only, enum ArchFlush mode) {
     if (windowed_timer && arch_recent_present()) return 1;
     os_unfair_lock_lock(&g_ep_lock);
     int active = atomic_load(&g_ep->active);
-    int any = (!only || g_ep == only) && (atomic_load(&g_ep->n) || active || atomic_load(&g_ep->crashed));
+    int stale = atomic_load(&g_ep->crashed) || g_ep->deaths != atomic_load(&g_arch_deaths);
+    int any = (!only || g_ep == only) && (atomic_load(&g_ep->n) || active || stale);
     os_unfair_lock_unlock(&g_ep_lock);
     if (windowed_timer && active) return 1;
     // nothing captured or under way: the period goes on. A compaction due to close (the prewarm over, no recapture queued) closes all the same: its recaptures are all in periods
@@ -11660,7 +11894,7 @@ static int arch_hand_over(ArchEpoch *only, enum ArchFlush mode) {
     if (!ne) { MLOG("[RED] pipeline archive: Metal made no compiler for a new flush period: the captures go on into the current one"); return 0; }
     if (windowed_timer && !ser_try_begin()) return 1;
     os_unfair_lock_lock(&g_ep_lock);
-    ArchEpoch *old = g_ep; any = (!only || old == only) && (atomic_load(&old->n) || atomic_load(&old->active) || atomic_load(&old->crashed));   // again: another flush may just have handed it over
+    ArchEpoch *old = g_ep; any = (!only || old == only) && (atomic_load(&old->n) || atomic_load(&old->active) || atomic_load(&old->crashed) || old->deaths != atomic_load(&g_arch_deaths));   // again: another flush may just have handed it over
     if (any) {
         g_ep = ne; atomic_store(&g_ep_t0, bp_now());
         if (warm_due) atomic_fetch_add(&g_warm_flushes, 1);
@@ -11705,6 +11939,70 @@ void mtl_arch_save(int wait_ms, int ending) {
 static void arch_at_exit(void) { mtl_warm_stop(); mtl_arch_save(MTL_QUIT_ARCH_MS, 1); }
 // What the harvest queue holds captured, then a flush, then every period handed over is written (not on g_arch_q, which writes them, nor on the harvest queue)
 static void arch_flush_wait(void) { arch_harvest_wait(DISPATCH_TIME_FOREVER); arch_flush(); if (g_arch_pending) dispatch_group_wait(g_arch_pending, DISPATCH_TIME_FOREVER); }
+// Recaptures offline packaging keys lost when a flush period was discarded or a capture fell back to plain compilation.
+// Runs only after arch_flush_wait() has drained prior writes and released the serialization gate (never on g_arch_q).
+// Known-buildable lost pipelines are retried in batched fresh periods first so an unconfirmed/poison pipeline cannot
+// repeatedly discard innocent captures; unconfirmed compiler-death failures are then retried one per isolated period.
+// Returns the count of keys still uncaptured (excluding permanently rejected pipelines).
+static int arch_pkg_recover(void) {
+    if (!arch_pkg_on()) return 0;
+    arch_flush_wait();
+    int rounds = 0;
+    while (arch_capturing()) {
+        NSMutableArray<ArchPkgItem *> *buildable = [NSMutableArray array], *unconfirmed = [NSMutableArray array];
+        os_unfair_lock_lock(&g_pkg_lock);
+        for (ArchPkgItem *it in g_pkg_items.allValues) {
+            if (!it->desc || it->retries >= g_arch_pkg_max_retries) continue;
+            if (it->state == ARCH_PKG_LOST_BUILDABLE) [buildable addObject:it];
+            else if (it->state == ARCH_PKG_LOST_UNCONFIRMED) [unconfirmed addObject:it];
+        }
+        os_unfair_lock_unlock(&g_pkg_lock);
+        if (!buildable.count && !unconfirmed.count) break;
+        rounds++;
+        MLOG("pipeline prebuild: recovery round %d/%d (%lu known-buildable, %lu unconfirmed compiler-death captures)",
+             rounds, g_arch_pkg_max_retries, (unsigned long)buildable.count, (unsigned long)unconfirmed.count);
+        if (buildable.count) {
+            for (ArchPkgItem *it in buildable) {
+                if (!arch_capturing()) break;
+                MTL4PipelineDescriptor *d = nil; int vd = 0, compute = 0;
+                os_unfair_lock_lock(&g_pkg_lock);
+                if (it->state == ARCH_PKG_LOST_BUILDABLE && it->desc && it->retries < g_arch_pkg_max_retries) {
+                    it->retries++; it->state = ARCH_PKG_PENDING; d = it->desc; vd = it->vd; compute = it->compute;
+                }
+                os_unfair_lock_unlock(&g_pkg_lock);
+                if (!d) continue;
+                @autoreleasepool {
+                    NSError *e = nil; int cap = 0;
+                    if (compute) (void)arch_capture_cs((MTL4ComputePipelineDescriptor *)d, &e, &cap);
+                    else (void)arch_capture_try(d, &e, vd, &cap, g_fn_wait_ms, NULL);
+                }
+            }
+            arch_flush_wait();
+        }
+        for (ArchPkgItem *it in unconfirmed) {
+            if (!arch_capturing()) break;
+            MTL4PipelineDescriptor *d = nil; int vd = 0, compute = 0;
+            os_unfair_lock_lock(&g_pkg_lock);
+            if (it->state == ARCH_PKG_LOST_UNCONFIRMED && it->desc && it->retries < g_arch_pkg_max_retries) {
+                it->retries++; it->state = ARCH_PKG_PENDING; d = it->desc; vd = it->vd; compute = it->compute;
+            }
+            os_unfair_lock_unlock(&g_pkg_lock);
+            if (!d) continue;
+            @autoreleasepool {
+                NSError *e = nil; int cap = 0;
+                if (compute) (void)arch_capture_cs((MTL4ComputePipelineDescriptor *)d, &e, &cap);
+                else (void)arch_capture_try(d, &e, vd, &cap, g_fn_wait_ms, NULL);
+            }
+            arch_flush_wait();   // isolate each unconfirmed pipeline in its own period so a deterministic crasher cannot discard innocent entries
+        }
+    }
+    g_pkg_last_rounds += rounds;
+    int missing = atomic_load(&g_pkg_unkeyed_lost);
+    os_unfair_lock_lock(&g_pkg_lock);
+    for (ArchPkgItem *it in g_pkg_items.allValues) if (it->state != ARCH_PKG_WRITTEN && it->state != ARCH_PKG_REJECTED) missing++;
+    os_unfair_lock_unlock(&g_pkg_lock);
+    return missing;
+}
 static void arch_note_new(void) {   // a base was compiled: try a flush after one interval (one timer for a burst of them)
     if (!g_arch_q || atomic_exchange(&g_arch_sched, 1)) return;
     // during a prewarm the game plays through, the flush waits for the period's age (arch_warm_flush_due): look again 10 s later while captures wait, new ones or not
@@ -12478,7 +12776,7 @@ static int pso_prebuild(int threads, int wait, dispatch_qos_class_t qos) {
     // done, unless its failures were found on another system build: then they are tried again (the rest are taken from the archive)
     if (pre_stamp_done([NSString stringWithContentsOfFile:stamp encoding:NSUTF8StringEncoding error:nil], want) && !other) { g_pre_running = 0; return -1; }
     g_pre_nolib = 0; g_pre_nolib_file = nil;
-    int n = (int)pairs.count; uint64_t t0 = bp_now(); int done0 = g_pre_done;
+    int n = (int)pairs.count; uint64_t t0 = bp_now(); int done0 = g_pre_done; uint64_t disc0 = atomic_load(&g_arch_discarded);
     MLOG("pipeline prebuild: %d shader pairs of %s%s%s%s%s, %d workers (%s)", n, pp.UTF8String, txt2 ? " and " : "", txt2 ? pp2.UTF8String : "", txt3 ? " and " : "", txt3 ? pp3.UTF8String : "", threads, wait ? "tool" : prepare_on() ? "prepare step, before the first frame" : "background");
     atomic_store(&g_pre_next, 0); atomic_store(&g_pre_flushing, 0); g_pre_later_n = 0; g_pre_deferred = 0;
     NSArray<NSNumber *> *ord = pre_order(pairs);
@@ -12509,12 +12807,14 @@ static int pso_prebuild(int threads, int wait, dispatch_qos_class_t qos) {
     dispatch_block_t done = ^{
         atomic_store(&g_pre_flushing, 1);
         arch_flush_wait();
+        int missing = arch_pkg_on() ? arch_pkg_recover() : 0;
+        int intact = arch_pkg_on() ? !missing && !atomic_load(&g_arch_cap_off) : atomic_load(&g_arch_discarded) == disc0 && !atomic_load(&g_arch_cap_off);
         NSMutableArray<NSString *> *fails = [NSMutableArray arrayWithArray:g_pre_known.allValues]; [fails addObjectsFromArray:g_pre_fails];
         if (fails.count) [[NSString stringWithFormat:@"# pipeline prebuild: pairs whose base failed to build on this system build, left to the draws until it or the stamp changes (nvn_mtl.m, pre_fail_load)\n%@%@\n",
                             pre_fail_head(want), [fails componentsJoinedByString:@"\n"]] writeToFile:failp atomically:YES encoding:NSUTF8StringEncoding error:nil];
         else unlink(failp.fileSystemRepresentation);
-        // a prebuild the process's end cut short: no stamp, so the next start builds what is left (the rest it finds in the archive)
-        if (atomic_load(&g_pre_next) >= n && !g_pre_later_n) [pre_device_stamp(want) writeToFile:stamp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        // a prebuild the process's end cut short, or whose archive dropped a period: no stamp, so the next start builds what is left (the rest it finds in the archive)
+        if (atomic_load(&g_pre_next) >= n && !g_pre_later_n && intact) [pre_device_stamp(want) writeToFile:stamp atomically:YES encoding:NSUTF8StringEncoding error:nil];
         MLOG("pipeline prebuild done: %d pairs, %d bases built, %d already archived, %d left to the draws, %d failed, %.1f s; %d times a pair was put back while another capture had one of its shader functions (fn_claim)",
              n, (int)g_pre_built, (int)g_pre_archived, (int)g_pre_skipped, (int)g_pre_failed, (bp_now() - t0) / 1e9, (int)g_pre_deferred);
         if (g_pre_done - done0 == n && !atomic_load(&g_warm_stop)) { atomic_store(&g_sweep_pairs, 1); arch_sweep(); }   // every pair's base was asked for
@@ -13060,32 +13360,66 @@ static long pre_warm_lists(NSArray<NSString *> *paths, int threads) {
          (unsigned long long)g_warm_cps, (unsigned long long)g_warm_mps, (int)atomic_load(&g_pre_warm_failed));
     return lines;
 }
-// The bundle form's output (DM_PSO_PREBUILD_OUT): every file the work folder (DM_PSO_ARCHIVE) holds goes into the output folder as <GPU>-prewarm-<NN>.mtl4a, with its index
-// (<GPU>-prewarm-<NN>.keys) and its period's pipelines script (prewarm-<NN>.mtl4-json), and prewarm.tsv, the stamp: what pso_bundle_open_prewarm opens. The folder's files are
-// this run's captures and those of an earlier run into it (the NSP script keeps it only while its inputs are the same). Returns 1, or 2 when the output is incomplete
+// The bundle form's output (DM_PSO_PREBUILD_OUT): recovers any interrupted captures in fresh periods first, then copies every valid file the work folder (DM_PSO_ARCHIVE) holds
+// into the output folder as <GPU>-prewarm-<NN>.mtl4a, with its index (<GPU>-prewarm-<NN>.keys) and its period's pipelines script (prewarm-<NN>.mtl4-json), and prewarm.tsv,
+// and compares the published key set against the requested captures (excluding permanently rejected pipelines). Returns 1, or 2 when the output is incomplete
 static int pre_bundle_out(NSString *out, long lines) {
+    if (arch_pkg_on()) (void)arch_pkg_recover();
     NSFileManager *fm = NSFileManager.defaultManager; NSString *pre = prewarm_prefix(g_dev.architecture.name);
     NSArray<NSString *> *staged = [[[fm contentsOfDirectoryAtPath:g_arch_dir error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self ENDSWITH '.mtl4a'"]] sortedArrayUsingSelector:@selector(compare:)];
     [fm createDirectoryAtPath:out withIntermediateDirectories:YES attributes:nil error:nil];
     for (NSString *old in [fm contentsOfDirectoryAtPath:out error:nil]) if ([old hasPrefix:pre] || [old hasPrefix:@"prewarm-"] || [old isEqualToString:@"prewarm.tsv"]) [fm removeItemAtPath:[out stringByAppendingPathComponent:old] error:nil];
     int k = 0, bad = 0; unsigned long long bytes = 0;
+    NSMutableSet<NSNumber *> *pub_keys = [NSMutableSet set];
     BOOL (^put)(NSString *, NSString *) = ^BOOL(NSString *src, NSString *dst) { return [fm linkItemAtPath:src toPath:dst error:nil] || [fm copyItemAtPath:src toPath:dst error:nil]; };   // a hard link, else a copy
     for (NSString *name in staged) {
         NSString *src = [g_arch_dir stringByAppendingPathComponent:name];
         if (!arch_file_ok(src)) { bad++; MLOG("[RED] pipeline prebuild: %s is not a pipeline archive, left out", src.UTF8String); continue; }
         NSString *dst = [out stringByAppendingPathComponent:[NSString stringWithFormat:@"%@%02d.mtl4a", pre, k]];
         if (!put(src, dst)) { bad++; MLOG("[RED] pipeline prebuild: cannot put %s in %s", name.UTF8String, out.UTF8String); continue; }
-        NSString *ksrc = arch_keys_path(src);   // its index goes with it (the host reads it at the open)
-        if ([fm fileExistsAtPath:ksrc] && !put(ksrc, arch_keys_path(dst))) MLOG("[RED] pipeline prebuild: cannot put the index of %s in %s", name.UTF8String, out.UTF8String);
+        NSString *ksrc = arch_keys_path(src), *kdst = arch_keys_path(dst);   // its index goes with it (the host reads it at the open)
+        if ([fm fileExistsAtPath:ksrc]) {
+            if (!put(ksrc, kdst)) MLOG("[RED] pipeline prebuild: cannot put the index of %s in %s", name.UTF8String, out.UTF8String);
+            else {
+                int complete = 0; NSData *kd = arch_keys_read(kdst, &complete);
+                const uint64_t *kv = kd.bytes; NSUInteger nk = kd.length / sizeof(uint64_t);
+                for (NSUInteger i = 0; i < nk; i++) [pub_keys addObject:@(kv[i])];
+            }
+        }
         NSString *js = [src.stringByDeletingPathExtension stringByAppendingPathExtension:@"mtl4-json"];   // the same pipelines for the other GPUs (build_ipa_from_nsp.py, metal-tt)
         if (js && [fm fileExistsAtPath:js]) put(js, [out stringByAppendingPathComponent:[NSString stringWithFormat:@"prewarm-%02d.mtl4-json", k]]);
         bytes += [[fm attributesOfItemAtPath:dst error:nil] fileSize]; k++;
     }
+    int requested = 0, published = 0, recovered = 0, rejected = 0, missing_lost = atomic_load(&g_pkg_unkeyed_lost), missing_died = 0;
+    NSMutableArray<NSNumber *> *missing_keys = [NSMutableArray array];
+    os_unfair_lock_lock(&g_pkg_lock);
+    for (ArchPkgItem *it in g_pkg_items.allValues) {
+        requested++;
+        if ([pub_keys containsObject:@(it->key)]) { published++; if (it->retries > 0) recovered++; }
+        else if (it->state == ARCH_PKG_REJECTED) rejected++;
+        else {
+            if (it->state == ARCH_PKG_LOST_UNCONFIRMED) missing_died++; else missing_lost++;
+            [missing_keys addObject:@(it->key)];
+        }
+    }
+    os_unfair_lock_unlock(&g_pkg_lock);
+    g_pkg_last_requested = requested; g_pkg_last_published = published; g_pkg_last_recovered = recovered;
+    g_pkg_last_missing_lost = missing_lost; g_pkg_last_missing_died = missing_died; g_pkg_last_rejected = rejected;
+    int missing = missing_lost + missing_died;
+    if (recovered) MLOG("pipeline prebuild: recovered %d interrupted pipeline captures in fresh periods (%d recovery rounds)", recovered, g_pkg_last_rounds);
+    if (rejected) MLOG("pipeline prebuild: %d pipelines permanently rejected by Metal (not retried, distinct from compiler-service loss)", rejected);
+    if (missing) {
+        [missing_keys sortUsingSelector:@selector(compare:)];
+        NSMutableArray<NSString *> *sample = [NSMutableArray array];
+        for (NSUInteger i = 0; i < MIN(missing_keys.count, (NSUInteger)8); i++) [sample addObject:[NSString stringWithFormat:@"%016llx", (unsigned long long)missing_keys[i].unsignedLongLongValue]];
+        MLOG("[RED] pipeline prebuild: %d requested pipeline keys still missing from %s after up to %d retries (%d lost from interrupted periods, %d repeated compiler-service failures%s%s)",
+             missing, out.UTF8String, g_arch_pkg_max_retries, missing_lost, missing_died, sample.count ? "; keys: " : "", sample.count ? [sample componentsJoinedByString:@", "].UTF8String : "");
+    }
     NSString *stamp = [NSString stringWithFormat:@"chain\t%s\ndepth\t%s\nlines\t%ld\nfiles\t%d\n%@", DMSH_CHAIN, atomic_load(&g_depth_zero) ? "near=0" : "near=-w", lines, k, arch_os_build()];
     if (k) [stamp writeToFile:[out stringByAppendingPathComponent:@"prewarm.tsv"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
     MLOG("pipeline prebuild: %d files (%.1f MB) for the app to bundle in %s", k, bytes / 1048576.0, out.UTF8String);
-    int ok = !bad && !atomic_load(&g_arch_cap_off);
-    if (!ok) MLOG("[RED] pipeline prebuild: the files for the app are incomplete (%d not usable, capturing %s)", bad, atomic_load(&g_arch_cap_off) ? "stopped" : "went on");
+    int ok = !bad && !atomic_load(&g_arch_cap_off) && !missing;
+    if (!ok) MLOG("[RED] pipeline prebuild: the files for the app are incomplete (%d not usable, %d missing keys, capturing %s)", bad, missing, atomic_load(&g_arch_cap_off) ? "stopped" : "went on");
     return ok ? 1 : 2;
 }
 // DM_PSO_PREBUILD=tool: what a first start would build, made ahead with no game, then exit (main.c). The host's other environment as for a run: DM_NVN_SHMAP, DM_MSL_DIR, DM_SAVE or
@@ -13100,7 +13434,7 @@ static int pre_bundle_out(NSString *out, long lines) {
 // pso_offline.py left to the device (rest_pairs.tsv: function constants). Returns 0 when not asked for, 1 done, 2 failed (the bundle form's output incomplete or missing what it needs)
 int mtl_pso_prebuild_tool(void) {
     const char *e = getenv("DM_PSO_PREBUILD"); if (!e || strcmp(e, "tool")) return 0;
-    g_pre_tool = 1;
+    g_pre_tool = 1; arch_pkg_reset();
     const char *w = getenv("DM_PSO_PREBUILD_WARM"), *m = getenv("DM_PSO_MANIFEST"), *oc = getenv("DM_PSO_PREBUILD_OUT"), *ac = getenv("DM_PSO_ARCHIVE");
     int warm = !(w && !strcmp(w, "0")); char *manifest = m ? strdup(m) : NULL;
     if (oc && *oc) {
@@ -13118,7 +13452,10 @@ int mtl_pso_prebuild_tool(void) {
     else if (lists) MLOG("pipeline prebuild: no Metal 4 compiler or no archive to capture into: the prewarm lists are left to the first start");
     MLOG("pipeline prebuild: %d captures found another of the same shader function under way (fn_claim); %d of them waited %d ms in vain and were built without the archive",
          (int)atomic_load(&g_fn_waits), (int)atomic_load(&g_fn_plain), g_fn_wait_ms);
-    if (!g_pre_out) return 1;
+    if (!g_pre_out) {
+        if (g_comp4 && g_arch_cap) (void)arch_pkg_recover();
+        return 1;
+    }
     if (!g_comp4 || !g_arch_cap) { MLOG("[RED] pipeline prebuild: no Metal 4 compiler or pipeline serializer: nothing for the app"); return 2; }
     return pre_bundle_out(g_pre_out, lines);
 }
@@ -13712,11 +14049,15 @@ static uint64_t pool_entry(int samp, int dtt, int id_, uint64_t limit, int *gone
     { uint64_t fwh = 0; NvImageHeap *fo = fam_owner((__bridge id<MTLTexture>)tv, &fwh);
       if (fo && fo->compressed) { fam_track_pool_serial(fo, r->t.serial, fwh); if (atomic_load_explicit(&fo->valid_wh, memory_order_acquire) != fwh) return 0; } }
     MTLTextureType got = (MTLTextureType)vtt; g_treg[id_].tt1 = vtt + 1;
+    id<MTLTexture> chk = (__bridge id<MTLTexture>)tv;
     if (got != (MTLTextureType)dtt) {   // a view when a shader read the ID through this table's type (pool_fit); else the dummy
         uint64_t b = pool_bridge_pair((int)got, dtt) && pool_seen_t(id_, dtt) ? pool_fit(id_, (__bridge id<MTLTexture>)tv, dtt) : 0;
         if (!b) { pool_type_note(id_, (int)got, dtt); return 0; }
         tr = b;
+        int lk = pool_lk(dtt);
+        if (lk >= 0 && g_treg[id_].palt[lk]) chk = (__bridge id<MTLTexture>)g_treg[id_].palt[lk];
     }
+    if (__builtin_expect(g_res_check_on, 0)) res_check(chk, "pool_gpu", id_);
     if (lead && got == MTLTextureTypeTextureBuffer) *lead = tbuf_lead(id_, (__bridge id<MTLTexture>)tv);
     if (g_treg[id_].retired && g_treg[id_].transient_sub == g_sub_serial) *transient = 1;
     return tr;
@@ -14110,6 +14451,7 @@ static int img_pool_elem(int tid, const nvn_rbind *b, uint64_t *rid, uint32_t *l
         t = v; tr = v.gpuResourceID._impl;
     }
     if (lead && t.textureType == MTLTextureTypeTextureBuffer) *lead = tbuf_lead(tid, t);
+    if (__builtin_expect(g_res_check_on, 0)) res_check(t, "img_pool_gpu", tid);
     if (r->retired && r->transient_sub == g_sub_serial) *transient = 1;
     *rid = tr;
     return 1;
@@ -14589,7 +14931,7 @@ static uint64_t htab_gpu(int stage, const nvn_rbind *b, __unsafe_unretained id<M
                 if (t && !fam_is_valid(t)) { t = nil; tr = 0; }
                 if (t && vtt != b->dtt) { uint64_t r2 = 0; t = tex_fit_elem(tid, t, (MTLTextureType)b->dtt, &r2); tr = t ? r2 : 0; }   // a handle the shader does not pick here may be another kind
                 if (t && b->dtt == (uint8_t)MTLTextureTypeTextureBuffer) lead[k] = tbuf_lead(tid, t);
-                if (t) { r = tr; p->ser[k] = g_treg[tid].t.serial; } } }
+                if (t) { if (__builtin_expect(g_res_check_on, 0)) res_check(t, "htab_gpu", tid); r = tr; p->ser[k] = g_treg[tid].t.serial; } } }
         e[k] = r ? r : dummy; }
     e[n] = dummy;
     memcpy(p->copy, now, bytes);
@@ -20416,7 +20758,43 @@ static void present_shape(id<MTLTexture> src, const int crop[4], double *w, doub
     v = atomic_load(&g_layer_shape);
     *w = v ? (double)(uint32_t)v : 1920; *h = v ? (double)(v >> 32) : 1080;
 }
-static MTLViewport present_fit(id<MTLTexture> src, const int crop[4], double dw, double dh) { double w, h; present_shape(src, crop, &w, &h); return present_viewport(w, h, dw, dh); }
+// Picture Fill on the Mac (DM_PICTURE_FIT=fill; on iOS front_ios.m sizes the view larger than the screen instead):
+// the picture covers the whole drawable and its edges are cropped, narrowing the source rectangle r to the drawable's
+// shape about its centre. A 16:9 game on a 16:10 screen loses about 5.5 % at each side and keeps its proportions.
+static int g_present_fill = -1;
+static int present_fill_on(void) {
+#if TARGET_OS_IPHONE
+    return 0;
+#else
+    if (g_present_fill < 0) {
+        const char *e = getenv("DM_PICTURE_FIT");
+        g_present_fill = e && !strcmp(e, "fill");
+        if (g_present_fill) MLOG("present: picture Fill (DM_PICTURE_FIT=fill), edges cropped to the window's shape");
+    }
+    return g_present_fill;
+#endif
+}
+static void present_cover(double w, double h, NSUInteger r[4], double dw, double dh) {
+    if (w <= 0 || h <= 0 || dw <= 0 || dh <= 0 || !r[2] || !r[3]) return;
+    double p = w / h, a = dw / dh;
+    if (p > a * 1.001) {
+        NSUInteger k = (NSUInteger)llround((double)r[2] * a / p);
+        if (k < 1) k = 1;
+        if (k > r[2]) k = r[2];
+        r[0] += (r[2] - k) / 2; r[2] = k;
+    } else if (a > p * 1.001) {
+        NSUInteger k = (NSUInteger)llround((double)r[3] * p / a);
+        if (k < 1) k = 1;
+        if (k > r[3]) k = r[3];
+        r[1] += (r[3] - k) / 2; r[3] = k;
+    }
+}
+static MTLViewport present_fit(id<MTLTexture> src, const int crop[4], NSUInteger r[4], double dw, double dh) {
+    double w, h; present_shape(src, crop, &w, &h);
+    if (!present_fill_on() || dw <= 0 || dh <= 0) return present_viewport(w, h, dw, dh);
+    present_cover(w, h, r, dw, dh);
+    return (MTLViewport){0, 0, dw, dh, 0, 1};
+}
 // The valid source rectangle of a present (x, y, width, height; the crop of nvnWindowSetCrop, zero = the whole texture); 0 when it lies outside the texture
 static int present_crop_rect(id<MTLTexture> src, const int crop[4], NSUInteger r[4]) {
     r[0] = 0; r[1] = 0; r[2] = src.width; r[3] = src.height;
@@ -20429,6 +20807,8 @@ static int present_crop_rect(id<MTLTexture> src, const int crop[4], NSUInteger r
 }
 static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4]) {
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
+    double dw = dst.width, dh = dst.height;
+    MTLViewport vp = present_fit(src, crop, r, dw, dh);
     NSUInteger cx = r[0], cy = r[1], cw = r[2], ch = r[3];
     static uint64_t last_crop[8]; uint64_t meta[8] = {src.width, src.height, cx, cy, cw, ch, dst.width, dst.height};
     if (memcmp(meta, last_crop, sizeof meta)) { memcpy(last_crop, meta, sizeof meta);
@@ -20436,8 +20816,6 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
              (unsigned long)cx, (unsigned long)cy, (unsigned long)cw, (unsigned long)ch, (unsigned long)dst.width, (unsigned long)dst.height); }
     present_pipeline(dst.pixelFormat, src.pixelFormat);
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-    double dw = dst.width, dh = dst.height;
-    MTLViewport vp = present_fit(src, crop, dw, dh);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     static double last_vp[4];   // Log one line when the viewport changes (used by the real-device screen-level acceptance screen_check.py to check the aspect ratio)
     if (memcmp(last_vp, &vp, sizeof last_vp)) { memcpy(last_vp, &vp, sizeof last_vp);
@@ -20760,7 +21138,7 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
     present_pipeline(dst.pixelFormat, src.pixelFormat);
     double dw = dst.width, dh = dst.height;
-    MTLViewport vp = present_fit(src, crop, dw, dh);
+    MTLViewport vp = present_fit(src, crop, r, dw, dh);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     int flipped = atomic_load_explicit(&g_origin_ll, memory_order_relaxed), wrote = 0;
     static int direct_ok = -1; if (direct_ok < 0) { const char *e = getenv("DM_FX_DIRECT"); direct_ok = !(e && !strcmp(e, "0")); }
