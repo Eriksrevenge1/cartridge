@@ -820,23 +820,24 @@ def survey_dump(src, out):
 
 def survey_nup(n, k, base, out):
     """A NUP package's files as nx_extract --manifest leaves an NSP's for the survey, without writing the RomFS: out/ExeFS, out/romfs_manifest.tsv (path, size and first 32 bytes of every
-    RomFS file, then the other programs' files it lacks), out/romfs_nro (the NRO modules, whole: their imports decide the graphics API and the modules) and the package's control data, else its
-    base game's. Returns the files listed"""
+    RomFS file, then the other programs' files it lacks, tagged program:<index> in an optional fourth column so romfs_marker stays in the packed program's own RomFS), out/romfs_nro (the NRO
+    modules, whole: their imports decide the graphics API and the modules) and the package's control data, else its base game's. Returns the files listed"""
     out.mkdir(parents=True)
     try: pack_nup.exefs(n, k, out / 'ExeFS')
     except pack_nup.Error as e: raise BuildError(str(e)) from e
     rows, seen = [], set()
-    def walk(d, pre):
+    def walk(d, pre, scope=''):
         for name, isdir, i in n.children(d):
             p = pre + '/' + os.fsdecode(name)
-            if isdir: walk(i, p); continue
+            if isdir: walk(i, p, scope); continue
             if p in seen: continue   # a path the program's own RomFS has
-            seen.add(p); rows.append(f'{p}\t{n.files[i][1]}\t{n.head(i).hex()}\n')
+            seen.add(p); rows.append(f'{p}\t{n.files[i][1]}\t{n.head(i).hex()}' + (f'\t{scope}\n' if scope else '\n'))
             if p.lower().endswith('.nro'):
                 o = out / 'romfs_nro' / p.lstrip('/'); o.parent.mkdir(parents=True, exist_ok=True)
                 with open(o, 'wb') as f: n.copy(i, f)
     try:
-        for d in [pack_nup.romfs_of(k, base), *pack_nup.sibling_romfs(n, k).values()]: walk(d, '')   # then the other programs' RomFS, which this one mounts by program index (a Switch 2 Edition's game data is its Switch 1 program's)
+        walk(pack_nup.romfs_of(k, base), '')
+        for idx, d in pack_nup.sibling_romfs(n, k).items(): walk(d, '', f'program:{idx}')   # then the other programs' RomFS, which this one mounts by program index (a Switch 2 Edition's game data is its Switch 1 program's)
         pack_nup.control(k, out, pack_nup.app_package(n) if base is None else base, say=say)   # what an update lacks, from its base game (or the metadata record)
     except pack_nup.Error as e: raise BuildError(str(e)) from e
     (out / 'romfs_manifest.tsv').write_text(MANIFEST_HEAD + ''.join(rows))
@@ -2749,7 +2750,16 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False, se
     ios, log = sh / 'ios', logs / 'dmsh_build.log'
     PROG.stage('Mac shaders' if mac else 'iOS shaders')
     chain = chain_of(repo)
-    shader_cache.adopt(sh / 'cache/cas', shader_cache.chain_file(sh / 'cache', chain), say)
+    cache = sh / 'cache'
+    misplaced = sh / 'partial-cache.db'
+    if cache.is_file():
+        # A fresh partial build used this path as a database when the cache directory did not exist.
+        shader_cache.Store(cache, say).close()   # fold a stopped build's WAL into the file before moving it
+        cache.rename(misplaced)
+    cache.mkdir(parents=True, exist_ok=True)   # DMSH_CAS treats an absent path as a database file
+    if misplaced.is_file():
+        misplaced.rename(cache / shader_cache.LEGACY)
+    shader_cache.adopt(cache / 'cas', shader_cache.chain_file(cache, chain), say)
     out = sh / 'partial' if seen else sh / 'cache' if mac else ios
     libs, kf, kmac = out / f'b-{chain}', ios / f'b-{chain}.key', out / 'key' if seen else sh / f'mac-b-{chain}.key'
     pso_pairs, geo_pairs = (side_table(g, sh / 'pkg', n) for n in ('pso_pairs.tsv', 'geo_pairs.tsv'))   # the split's copies are shader inputs too (vs_pad, dmsh_chain.mesh_pairs)
@@ -2780,7 +2790,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False, se
     if ALLOW_OTHER_METAL: benv['DM_ALLOW_OTHER_METAL'] = '1'
     if mac: del benv['IOSOUT']   # dmsh_build.py builds the iOS libraries only with IOSOUT
     elif pull is False: benv['DMSH_IOS_PULL'] = '0'   # nothing in this app reads them
-    if seen: benv['DMSH_CAS'] = str(sh / 'cache')   # the full build's folder: this chain's file there
+    if seen: benv['DMSH_CAS'] = str(cache)   # the full build's folder: this chain's file there
     benv['DMSH_TABLE_MEMO'] = str(sh / 'cache')   # c1_guard.py / cb_extent.py keep each shader's answer there: a build that restores every shader makes the tables in seconds
     prog = sh / 'progress.json'; rmtree(prog); benv['DMSH_PROGRESS'] = str(prog)   # dmsh_build.py's progress (ShaderWatch)
     try: PROG.watch(ShaderWatch(prog))
