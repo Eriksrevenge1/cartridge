@@ -37,7 +37,8 @@ struct ShellView: View {
     /// The rail's choices: All, each source that has games here, Favorites, Not played yet
     private var filters: [(String, String)] {
         var out = [("All", "square.grid.2x2.fill")]
-        let kinds = Set(titles.all.map(kind))
+        // a store's tab for its games, and a bottle's tab (CrossOver, Whisky) for every game in one, whichever launcher installed it
+        let kinds = Set(titles.all.map(kind)).union(titles.all.compactMap { t in t.external?.runtime.flatMap { $0 == .crossover || $0 == .whisky ? $0.rawValue : nil } })
         for (k, sym) in [("Switch", "gamecontroller.fill"), ("Steam", "cloud.fill"), ("Battle.net", "bolt.fill"), ("Epic Games", "e.square.fill"), ("GOG", "g.square.fill"),
                          ("itch.io", "i.square.fill"), ("Ubisoft Connect", "u.square.fill"), ("Amazon Games", "a.square.fill"), ("Heroic", "h.square.fill"),
                          ("CrossOver", "wineglass.fill"), ("Whisky", "wineglass"), ("App Store", "bag.fill"), ("Mac", "macwindow")] where kinds.contains(k) { out.append((k, sym)) }
@@ -493,7 +494,16 @@ struct LabelPanel: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
                 Circle().fill(title.game != nil ? Brand.red : Brand.cyan).frame(width: 8, height: 8)
-                Text(title.platform.uppercased()).font(.system(size: 11, weight: .heavy)).tracking(2).foregroundStyle(.white.opacity(0.8))
+                HStack(spacing: 8) {
+                    Text(title.platform.uppercased()).font(.system(size: 11, weight: .heavy)).tracking(2).foregroundStyle(.white.opacity(0.8))
+                    // a bottle game's Wine rating (ProtonDB), so a game that will not run there says so before Play
+                    if let c = DetailsStore.shared.details(title)?.compat {
+                        Text(c == "borked" ? "WON'T RUN IN WINE" : c.uppercased()).font(.system(size: 10, weight: .heavy)).tracking(1.5)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Capsule().fill(["platinum": Color(white: 0.75), "gold": .yellow, "silver": .gray, "bronze": .orange][c] ?? .red).opacity(0.85))
+                            .foregroundStyle(.black)
+                    }
+                }
             }
             if let logo = details.logo(title) {
                 Image(nsImage: logo).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(maxWidth: 400, maxHeight: 160).frame(width: 400, alignment: .leading)

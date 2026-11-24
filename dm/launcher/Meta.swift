@@ -22,6 +22,7 @@ struct Details: Codable, Equatable {
     var fetched = Date()
     var chosenWall: String?    // the player's own choice (Choose Wallpaper…), kept when the details are looked up again
     var walls: [String]?       // the good wallpapers, best first: the home turns to the next every few minutes
+    var compat: String?        // a bottle game's rating from ProtonDB's players (platinum, gold, silver, bronze, borked): Proton and CrossOver are both Wine
 }
 
 final class DetailsStore: ObservableObject {
@@ -133,6 +134,9 @@ final class DetailsStore: ObservableObject {
             if e.store == .steam, let id = Int(e.id.split(separator: ":")[1].split(separator: "@")[0]) {
                 steamLocal(id, into: &d, dir: dir)
                 if online { await steam(id, into: &d, dir: dir) }
+                // in a bottle: how well it runs under Wine, as ProtonDB's players report it (only the app ID is sent)
+                if online, e.runtime == .crossover || e.runtime == .whisky, let (data, _) = await get("https://www.protondb.com/api/v1/reports/summaries/\(id).json"),
+                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let tier = j["tier"] as? String { d.compat = tier }
             } else if online {
                 if let id = await steamSearch(e.name) { await steam(id, into: &d, dir: dir, art: true) }
                 if d.about == nil { await wikipedia(e.name, into: &d, dir: dir) }

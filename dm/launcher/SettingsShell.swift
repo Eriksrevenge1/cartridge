@@ -163,6 +163,7 @@ struct LibrarySettings: View {
         case .itch: what = "The itch.io app's games"
         case .ubisoft: what = "Ubisoft Connect's games in a bottle"
         case .amazon: what = "Amazon Games' games, in a bottle or through Heroic"
+        case .ea: what = "The EA app's games in a bottle"
         case .appStore: what = "Games from the Mac App Store"
         case .mac: what = "Other apps in Applications that call themselves games"
         case .crossover: what = "Games in CrossOver bottles, and the launchers above inside them"

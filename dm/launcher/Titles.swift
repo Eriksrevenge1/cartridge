@@ -99,6 +99,7 @@ final class Titles: ObservableObject {
         case .url(let s): if let u = URL(string: s) { NSWorkspace.shared.open(u) }
         case .app(let p): NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: p), configuration: NSWorkspace.OpenConfiguration())
         case .process(let exe, let args): run(exe, args)
+        // the bottle by its path, which cxstart takes as it is (CXBottle.pm find_bottle): a bottle on another drive, or two bottles of one name, start right
         case .crossover(let bottle, let args): run(Places.mac.cxstart, ["--bottle", bottle, "--"] + args)
         case .whisky(let exe):
             if let whisky = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.isaacmarovitz.Whisky") {

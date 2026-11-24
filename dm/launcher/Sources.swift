@@ -1,24 +1,28 @@
 // The games other launchers installed, read from the files each launcher keeps, never fetched: what the library shows beside the nxnative apps (Titles.swift).
 // Each reader takes the folders it reads (a Places), so tests run it on fixture trees (dm/launcher/tests/sources_check.swift). A Windows launcher inside a CrossOver or
-// Whisky bottle is read by the same reader through the bottle's drives (WinRoot), and its games start through the bottle.
+// Whisky bottle is read by the same reader through the bottle's drives (WinRoot), and its games start through the bottle. Each format below was checked (2026-11)
+// against the code of launchers that read the same files every day: Playnite's library plug-ins, Heroic, Lutris and Whisky's own.
 //
 //   Steam       steamapps/libraryfolders.vdf, each library's appmanifest_<id>.acf; play time from userdata/<user>/config/localconfig.vdf
-//   Battle.net  Agent/product.db (protobuf: each install's uid and folder); last play from Battle.net.config (Mac)
-//   Epic        EpicGamesLauncher/Data/Manifests/*.item (JSON)
-//   GOG         goggame-<id>.info in a game's folder or app (Mac); HKLM\Software\[Wow6432Node\]GOG.com\Games\<id> in a bottle's registry
+//   Battle.net  Agent/product.db (protobuf: each install's uid and folder); last play from Battle.net.config (Mac); started by Battle.net's binary with
+//               --exec="launch <product code>" (Playnite's uid → code table)
+//   Epic        EpicGamesLauncher/Data/Manifests/*.item (JSON); add-ons, plug-ins and Unreal Engine left out as Playnite does
+//   GOG         goggame-<id>.info in a game's folder or app (Mac); HKLM\Software\[Wow6432Node\]GOG.com\Games\<id> in a bottle's registry, or
+//               Galaxy's uninstall entry (<id>_is1, publisher GOG.com) and the primary play task of the game's goggame-<id>.info
 //   Heroic      legendaryConfig/legendary/installed.json (Epic), gog_store/installed.json, nile_config/nile/installed.json (Amazon), sideload_apps/library.json
-//   itch        itch/db/butler.db (SQLite: caves, games, install_locations)
+//   itch        itch/db/butler.db (SQLite: caves, games, install_locations); started by itch://install?game_id=<id>&launch, the link the itch app handles
 //   Ubisoft     HKLM\Software\[Wow6432Node\]Ubisoft\Launcher\Installs\<id> in a bottle's registry
 //   Amazon      Amazon Games/Data/Games/Sql/GameInstallInfo.sqlite in a bottle
+//   EA app      Program Files\EA Games\<game>\__Installer\installerdata.xml (its offer id) in a bottle, started by origin2://game/launch?offerIds=…
 //   CrossOver   ~/Library/Application Support/CrossOver/Bottles/<bottle>: the launchers above inside it, and its other Start menu programs (cxmenu.conf)
-//   Whisky      its bottles (Metadata.plist pins, and the launchers above inside each)
+//   Whisky      its bottles (its Bottles folder, and the folders BottleVM.plist lists): Metadata.plist info.pins, and the launchers above inside each
 //   Mac         apps in /Applications and ~/Applications whose category is a game category; App Store ones carry Contents/_MASReceipt
 import Foundation
 import SQLite3
 
 enum Store: String, Codable, CaseIterable {
     case steam = "Steam", battlenet = "Battle.net", epic = "Epic Games", gog = "GOG", heroic = "Heroic", itch = "itch.io", ubisoft = "Ubisoft Connect",
-         amazon = "Amazon Games", appStore = "App Store", mac = "Mac", crossover = "CrossOver", whisky = "Whisky"
+         amazon = "Amazon Games", ea = "EA app", appStore = "App Store", mac = "Mac", crossover = "CrossOver", whisky = "Whisky"
 }
 
 /// How a game starts
@@ -26,7 +30,7 @@ enum Launch: Hashable {
     case url(String)                                   // a launcher's link (steam://, com.epicgames.launcher://, heroic://, itch://)
     case app(String)                                   // a Mac app's path
     case process(String, [String])                     // an executable and its arguments (Battle.net's --exec)
-    case crossover(bottle: String, args: [String])     // CrossOver's cxstart --bottle <bottle> -- <args>
+    case crossover(bottle: String, args: [String])   // the bottle's folder (cxstart --bottle takes a path)     // CrossOver's cxstart --bottle <bottle> -- <args>
     case whisky(exe: String)                           // a Windows program Whisky opens
 }
 
@@ -56,6 +60,17 @@ struct Places {
     }
     var support: URL { home.appendingPathComponent("Library/Application Support") }
     var cxstart: String { crossoverApp.appendingPathComponent("Contents/SharedSupport/CrossOver/bin/cxstart").path }
+    /// The folders CrossOver keeps bottles in: its default, and the one chosen in its settings (its BottleDir preference, e.g. a game drive)
+    var crossoverBottleDirs: [URL] {
+        var dirs = [support.appendingPathComponent("CrossOver/Bottles")]
+        let prefs = NSDictionary(contentsOf: home.appendingPathComponent("Library/Preferences/com.codeweavers.CrossOver.plist"))
+        let live = home == FileManager.default.homeDirectoryForCurrentUser ? UserDefaults(suiteName: "com.codeweavers.CrossOver")?.string(forKey: "BottleDir") : nil
+        if let d = live ?? prefs?["BottleDir"] as? String, !d.isEmpty {
+            let u = URL(fileURLWithPath: (d as NSString).expandingTildeInPath)
+            if !dirs.contains(where: { $0.standardizedFileURL == u.standardizedFileURL }) { dirs.append(u) }
+        }
+        return dirs
+    }
 }
 
 enum Sources {
@@ -79,13 +94,16 @@ enum Sources {
             add(.gog) { GOGReader.windows(b) }
             add(.ubisoft) { UbisoftReader.windows(b) }
             add(.amazon) { AmazonReader.windows(b) }
+            add(.ea) { EAReader.windows(b) }
             out += b.programs(excluding: out)   // what else the bottle has in its Start menu (or Whisky pins)
         }
         // Mac apps last: a launcher's game app is named by its launcher above
         let known = Set(out.compactMap(\.app)) .union(out.compactMap(\.folder))
         out += MacGamesReader.read(p, enabled: enabled, known: known)
         var seen = Set<String>(), unique: [ExternalGame] = []
-        for g in out where seen.insert(g.id).inserted { unique.append(g) }
+        // a launcher's record can outlive the game (uninstalled by hand, a library on a drive that is not plugged in): only what is on disk is on the shelf
+        func onDisk(_ g: ExternalGame) -> Bool { (g.folder ?? g.app).map { exists(URL(fileURLWithPath: $0)) } ?? true }
+        for g in out where onDisk(g) && seen.insert(g.id).inserted { unique.append(g) }
         return unique
     }
 }
@@ -180,7 +198,7 @@ struct WinRoot {
         return rest.reduce(base) { $0.appendingPathComponent($1) }
     }
     /// How a program in this bottle starts
-    func launch(_ args: [String]) -> Launch { runtime == .whisky ? .whisky(exe: args.first ?? "") : .crossover(bottle: name, args: args) }
+    func launch(_ args: [String]) -> Launch { runtime == .whisky ? .whisky(exe: args.first ?? "") : .crossover(bottle: dir.path, args: args) }
     func launchURL(_ url: String) -> Launch { launch(["C:\\windows\\system32\\start.exe", url]) }
     func game(_ id: String, _ name: String, _ store: Store, _ launch: Launch, folder: URL?, size: Int64? = nil, last: Date? = nil) -> ExternalGame {
         ExternalGame(id: "\(id)@\(runtime.rawValue):\(self.name)", name: name, store: store, launch: launch, folder: folder?.path, bottle: self.name, runtime: runtime, size: size, lastPlayed: last)
@@ -190,12 +208,19 @@ struct WinRoot {
     var user: Registry { Registry(file: dir.appendingPathComponent("user.reg")) }
 
     static func crossover(_ p: Places) -> [WinRoot] {
-        children(p.support.appendingPathComponent("CrossOver/Bottles")).filter { exists($0.appendingPathComponent("cxbottle.conf")) }
+        p.crossoverBottleDirs.flatMap(children).filter { exists($0.appendingPathComponent("cxbottle.conf")) }
             .map { WinRoot(name: $0.lastPathComponent, dir: $0, runtime: .crossover, cxstart: p.cxstart) }
     }
     static func whisky(_ p: Places) -> [WinRoot] {
-        let root = p.home.appendingPathComponent("Library/Containers/com.isaacmarovitz.Whisky/Bottles")
-        return children(root).filter { exists($0.appendingPathComponent("drive_c")) }.map { b in
+        let container = p.home.appendingPathComponent("Library/Containers/com.isaacmarovitz.Whisky")
+        var dirs = children(container.appendingPathComponent("Bottles"))
+        if let vm = NSDictionary(contentsOf: container.appendingPathComponent("BottleVM.plist")), let paths = vm["paths"] as? [Any] {
+            for x in paths {
+                let u = (x as? String).map { $0.hasPrefix("file:") ? URL(string: $0) : URL(fileURLWithPath: $0) } ?? (x as? [String: Any])?["relative"].flatMap { ($0 as? String).flatMap(URL.init(string:)) }
+                if let u = u ?? nil, !dirs.contains(where: { $0.standardizedFileURL == u.standardizedFileURL }) { dirs.append(u) }
+            }
+        }
+        return dirs.filter { exists($0.appendingPathComponent("drive_c")) }.map { b in
             let meta = NSDictionary(contentsOf: b.appendingPathComponent("Metadata.plist"))
             let name = ((meta?["info"] as? [String: Any])?["name"] as? String) ?? (meta?["name"] as? String) ?? b.lastPathComponent
             return WinRoot(name: name, dir: b, runtime: .whisky, cxstart: "")
@@ -219,7 +244,7 @@ struct WinRoot {
                 out.append(game("lnk:\(low)", title, .crossover, launch(["C:\\windows\\system32\\start.exe", win]), folder: nil))
             }
         }
-        if runtime == .whisky, let meta = NSDictionary(contentsOf: dir.appendingPathComponent("Metadata.plist")), let pins = meta["pins"] as? [[String: Any]] {
+        if runtime == .whisky, let meta = NSDictionary(contentsOf: dir.appendingPathComponent("Metadata.plist")), let pins = ((meta["info"] as? [String: Any])?["pins"] ?? meta["pins"]) as? [[String: Any]] {   // Whisky: info.pins (BottleSettings.swift)
             for pin in pins {
                 guard let title = pin["name"] as? String, let u = (pin["url"] as? String) ?? ((pin["url"] as? [String: Any])?["relative"] as? String) else { continue }
                 let path = u.hasPrefix("file://") ? (URL(string: u)?.path ?? u) : u
@@ -401,10 +426,13 @@ enum BattleNetReader {
     /// its log names the product WoWF). product.db keeps the uid in lower case for both, so the codes are Battle.net's own, as its logs and Blizzard's launch
     /// shortcuts spell them; another uid passes as product.db has it
     static func launchCode(_ i: Install) -> String {
+        // Playnite's table (BattleNetLibrary/BattleNetGames.cs: uid → product code), and World of Warcraft's other editions as Battle.net's log names them
         let known = ["wow": "WoW", "wowt": "WoWPTR", "wowf": "WoWF", "wow_classic": "WoWC", "wow_classic_era": "WoWClassic", "wow_beta": "WoWX",
-                     "pro": "Pro", "fenris": "Fen", "osi": "OSI", "diablo3": "D3", "hero": "Hero", "s1": "S1", "s2": "S2", "w3": "W3", "hs_beta": "WTCG",
-                     "anbs": "ANBS", "auks": "AUKS", "viper": "VIPR", "odin": "ODIN", "lazarus": "LAZR", "zeus": "ZEUS", "rtro": "RTRO", "wlby": "WLBY"]
-        return known[i.uid] ?? (i.code.isEmpty ? i.uid : i.code)
+                     "diablo3": "D3", "s2": "S2", "s1": "S1", "hs_beta": "WTCG", "heroes": "Hero", "prometheus": "Pro", "viper": "VIPR", "odin": "ODIN",
+                     "w3": "W3", "lazarus": "LAZR", "zeus": "ZEUS", "wlby": "WLBY", "osi": "OSI", "rtro": "RTRO", "fore": "FORE", "anbs": "ANBS", "auks": "AUKS",
+                     "fen": "Fen", "fenris": "Fen", "d1": "D1", "w1r": "W1R", "w2r": "W2R", "w1": "W1", "w2": "W2", "gryphon": "GRY", "aris": "ARIS",
+                     "scorpio": "SCOR", "arkansas": "ARK", "libra": "LBRA", "pinta": "PNTA", "aqua": "AQUA"]
+        return known[i.uid.lowercased()] ?? (i.code.isEmpty ? i.uid : i.code)
     }
     /// product.db: field 1 is each install (uid 1, product code 2, settings 3 whose field 1 is the install path); Battle.net and its agent are not games
     static func installs(_ u: URL) -> [Install] {
@@ -458,7 +486,13 @@ enum EpicReader {
         children(dir).filter { $0.pathExtension.lowercased() == "item" }.compactMap { f in
             guard let m = readJSON(f) as? [String: Any], let name = m["DisplayName"] as? String, let appName = m["AppName"] as? String,
                   (m["bIsIncompleteInstall"] as? Bool) != true else { return nil }
-            if let cats = m["AppCategories"] as? [String], !cats.isEmpty, !cats.contains(where: { $0.lowercased() == "games" }) { return nil }
+            // what is not a game, by the rules Playnite has used on these manifests for years (EpicLibrary.cs): an add-on that cannot be launched, a plug-in,
+            // Unreal Engine and its plug-ins
+            let cats = (m["AppCategories"] as? [String] ?? []).map { $0.lowercased() }
+            if cats.contains(where: { $0.hasPrefix("addons") }) && !cats.contains("addons/launchable") { return nil }
+            if cats.contains("plugins") || cats.contains("plugins/engine") { return nil }
+            if (m["CompatibleApps"] as? [String] ?? []).contains(where: { $0.hasPrefix("UE_") }) { return nil }
+            if (m["TechnicalType"] as? String ?? "").contains("plugins/engine") || appName.hasPrefix("UE_") { return nil }
             let ns = m["CatalogNamespace"] as? String ?? "", item = m["CatalogItemId"] as? String ?? ""
             let link = "com.epicgames.launcher://apps/\(ns)%3A\(item)%3A\(appName)?action=launch&silent=true"
             let loc = m["InstallLocation"] as? String ?? ""
@@ -477,10 +511,21 @@ enum EpicReader {
 enum GOGReader {
     /// GOG games are free of DRM: each starts by its own program, Galaxy or not
     static func windows(_ b: WinRoot) -> [ExternalGame] {
-        b.machine.subkeys("Software\\GOG.com\\Games").compactMap { id, v in
+        var out = b.machine.subkeys("Software\\GOG.com\\Games").compactMap { id, v -> ExternalGame? in
             guard let name = v["gamename"], let path = v["path"], let exe = v["exe"] ?? v["launchcommand"] else { return nil }
             return b.game("gog:\(v["gameid"] ?? id)", name, .gog, b.launch([exe.replacingOccurrences(of: "\"", with: "")]), folder: b.mac(path))
         }
+        let have = Set(out.map(\.id))
+        for (key, v) in b.machine.subkeys("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall") where key.hasSuffix("_is1") && v["publisher"] == "GOG.com" {
+            let id = String(key.dropLast(4))
+            guard id.allSatisfy(\.isNumber), let name = v["displayname"], let path = v["installlocation"] else { continue }
+            let folder = b.mac(path)
+            guard let j = readJSON(folder.appendingPathComponent("goggame-\(id).info")) as? [String: Any], let tasks = j["playTasks"] as? [[String: Any]],
+                  let task = tasks.first(where: { ($0["isPrimary"] as? Bool) == true }) ?? tasks.first, let rel = task["path"] as? String else { continue }
+            let g = b.game("gog:\(id)", name, .gog, b.launch([path.hasSuffix("\\") ? path + rel : path + "\\" + rel]), folder: folder)
+            if !have.contains(g.id) { out.append(g) }
+        }
+        return out
     }
     /// A Mac GOG game: its app holds goggame-<id>.info (JSON: gameId, name)
     static func info(_ app: URL) -> (id: String, name: String)? {
@@ -502,7 +547,8 @@ enum HeroicReader {
         var out: [ExternalGame] = []
         func link(_ app: String, _ runner: String) -> Launch { .url("heroic://launch?appName=\(app)&runner=\(runner)") }
         // Epic, through legendary: { appName: { title, install_path, platform } }
-        if let j = readJSON(root.appendingPathComponent("legendaryConfig/legendary/installed.json")) as? [String: [String: Any]] {
+        for file in ["installed.json", "third-party-installed.json"] {
+            guard let j = readJSON(root.appendingPathComponent("legendaryConfig/legendary/\(file)")) as? [String: [String: Any]] else { continue }
             for (app, v) in j { if let t = v["title"] as? String { out.append(ExternalGame(id: "epic:\(app)", name: t, store: .epic, launch: link(app, "legendary"), folder: v["install_path"] as? String, runtime: .heroic)) } }
         }
         // GOG: { installed: [ { appName, install_path, platform } ] }, titles in the store's library cache
@@ -518,8 +564,8 @@ enum HeroicReader {
         }
         // Amazon, through nile: [ { id, path } ]
         var nileTitles: [String: String] = [:]
-        if let lib = readJSON(root.appendingPathComponent("store_cache/nile_library.json")) as? [String: Any], let games = lib["games"] as? [[String: Any]] {
-            for g in games { if let a = g["app_name"] as? String, let t = g["title"] as? String { nileTitles[a] = t } }
+        if let lib = readJSON(root.appendingPathComponent("nile_config/nile/library.json")) as? [[String: Any]] {
+            for g in lib { if let p = g["product"] as? [String: Any], let a = p["id"] as? String, let t = p["title"] as? String { nileTitles[a] = t } }
         }
         if let list = readJSON(root.appendingPathComponent("nile_config/nile/installed.json")) as? [[String: Any]] {
             for v in list {
@@ -544,13 +590,13 @@ enum ItchReader {
     static func read(_ p: Places) -> [ExternalGame] {
         let db = p.support.appendingPathComponent("itch/db/butler.db")
         return sqlite(db, """
-            SELECT caves.id AS cave, games.title AS title, install_locations.path AS root, caves.install_folder_name AS dir, caves.last_touched_at AS last, caves.seconds_run AS secs
+            SELECT caves.id AS cave, games.id AS game, games.title AS title, install_locations.path AS root, caves.install_folder_name AS dir, caves.last_touched_at AS last, caves.seconds_run AS secs
             FROM caves JOIN games ON games.id = caves.game_id LEFT JOIN install_locations ON install_locations.id = caves.install_location_id
             """).compactMap { r in
             guard let cave = r["cave"], let title = r["title"] else { return nil }
             let folder = r["root"].map { URL(fileURLWithPath: $0).appendingPathComponent(r["dir"] ?? "").path }
             let last = r["last"].flatMap { ISO8601DateFormatter().date(from: $0) }
-            return ExternalGame(id: "itch:\(cave)", name: title, store: .itch, launch: .url("itch://caves/\(cave)/launch"), folder: folder,
+            return ExternalGame(id: "itch:\(cave)", name: title, store: .itch, launch: .url("itch://install?game_id=\(r["game"] ?? "")&launch"), folder: folder,
                                 lastPlayed: last, seconds: r["secs"].flatMap(Double.init))
         }
     }
@@ -565,6 +611,20 @@ enum UbisoftReader {
             let folder = b.mac(dir)
             guard exists(folder) else { return nil }
             return b.game("ubisoft:\(id)", folder.lastPathComponent, .ubisoft, b.launchURL("uplay://launch/\(id)/0"), folder: folder)
+        }
+    }
+}
+
+/// The EA app installs each game in Program Files\EA Games\<game>, whose __Installer\installerdata.xml names its offer (<contentIDs><contentID>, the first),
+/// and starts one by origin2://game/launch?offerIds=… (as Lutris does, lutris/services/ea_app.py)
+enum EAReader {
+    static func windows(_ b: WinRoot) -> [ExternalGame] {
+        ["C:\\Program Files\\EA Games", "C:\\Program Files (x86)\\EA Games"].flatMap { children(b.mac($0)) }.compactMap { folder -> ExternalGame? in
+            guard let xml = try? String(contentsOf: folder.appendingPathComponent("__Installer/installerdata.xml"), encoding: .utf8),
+                  let a = xml.range(of: "<contentID>"), let z = xml.range(of: "</contentID>", range: a.upperBound..<xml.endIndex) else { return nil }
+            let offer = xml[a.upperBound..<z.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !offer.isEmpty, let q = offer.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+            return b.game("ea:\(offer)", folder.lastPathComponent, .ea, b.launchURL("origin2://game/launch?offerIds=\(q)&autoDownload=1"), folder: folder)
         }
     }
 }
