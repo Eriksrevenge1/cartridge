@@ -139,6 +139,7 @@ final class Library: ObservableObject {
 
     /// Starts the game: its own launcher, without its settings window, so this launcher's choices apply as they are saved
     func play(_ g: Game) {
+        NSLog("Cartridge: start %@ (called from %@)", g.name, Thread.callStackSymbols.dropFirst().prefix(3).map { String($0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).prefix(1).joined()) }.joined(separator: " < "))
         guard !running.contains(g.id) else { NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).first?.activate(); return }
         // started from Finder or the Dock (a tap of Home in it opens console mode): bring it forward rather than start it twice
         if let other = NSRunningApplication.runningApplications(withBundleIdentifier: g.bundleID).first { other.activate(); return }
@@ -159,6 +160,7 @@ final class Library: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 Stats.shared.played(g, from: started)   // before running changes, so the views that redraw read the new time
+                Sessions.shared.ended(Title(kind: .nx(g)), seconds: Date().timeIntervalSince(started))
                 RecentFile.write(self.games)
                 self.running.remove(g.id); self.processes[g.id] = nil; self.verifying.remove(g.id); self.batteryNote[g.id] = nil
                 let s = proc.terminationReason == .uncaughtSignal ? 128 + proc.terminationStatus : proc.terminationStatus

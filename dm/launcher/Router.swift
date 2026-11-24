@@ -44,5 +44,6 @@ final class Router: ObservableObject {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ n: Notification) { DevSnapshot.start() }
     func application(_ application: NSApplication, open urls: [URL]) { for u in urls { Router.shared.handle(u) } }
 }

@@ -174,10 +174,22 @@ final class Stats {
     init() {
         all = (store.data(forKey: "play.stats")).flatMap { try? JSONDecoder().decode([String: PlayStats].self, from: $0) } ?? [:]
     }
-    func of(_ g: Game) -> PlayStats { all[g.titleID] ?? PlayStats() }
-    func played(_ g: Game, from start: Date) {
-        var s = of(g); s.last = Date(); s.seconds += max(0, Date().timeIntervalSince(start)); all[g.titleID] = s
+    func of(_ g: Game) -> PlayStats { of(key: g.titleID) }
+    /// A Switch game's title ID, or another launcher's game's id (Titles.swift)
+    func of(key: String) -> PlayStats { all[key] ?? PlayStats() }
+    func played(_ g: Game, from start: Date) { played(key: g.titleID, from: start) }
+    func played(key: String, from start: Date) {
+        var s = of(key: key); s.last = Date(); s.seconds += max(0, Date().timeIntervalSince(start)); all[key] = s
         if let d = try? JSONEncoder().encode(all) { store.set(d, forKey: "play.stats") }
+        // each session (its start and length), the 200 latest per game, for the play calendar on a game's page
+        var log = (store.dictionary(forKey: "play.sessions") as? [String: [[Double]]]) ?? [:]
+        log[key, default: []].append([start.timeIntervalSince1970, max(0, Date().timeIntervalSince(start))])
+        log[key] = Array(log[key]!.suffix(200))
+        store.set(log, forKey: "play.sessions")
+    }
+    /// A game's sessions, oldest first
+    func sessions(key: String) -> [(start: Date, seconds: Double)] {
+        ((store.dictionary(forKey: "play.sessions") as? [String: [[Double]]])?[key] ?? []).compactMap { $0.count == 2 ? (Date(timeIntervalSince1970: $0[0]), $0[1]) : nil }
     }
     static func describe(_ s: PlayStats) -> String? {
         guard let last = s.last else { return nil }

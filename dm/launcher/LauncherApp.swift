@@ -18,8 +18,8 @@ struct LauncherApp: App {
 
     var body: some Scene {
         WindowGroup("Cartridge", id: "library") {
-            LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder)
-                .frame(minWidth: 860, minHeight: 560)
+            ShellView().environmentObject(library).environmentObject(pad).environmentObject(builder)
+                .frame(minWidth: 1100, minHeight: 700)
                 .modifier(SetupOnFirstStart())
                 .task { Engine.shared.ensure() }   // a new Cartridge's engine unpacked on the games folder's drive
                 .task { Updates.shared.startCheck() }   // once a day (Settings › Updates)
@@ -34,12 +34,16 @@ struct LauncherApp: App {
             }
             CommandGroup(after: .sidebar) {
                 ConsoleCommand()
+                ListCommand()
             }
         }
         Window("Console Mode", id: "console") {
-            ConsoleView().environmentObject(library).environmentObject(pad).frame(minWidth: 900, minHeight: 560)
+            ShellView(console: true).environmentObject(library).environmentObject(pad).environmentObject(builder).frame(minWidth: 1100, minHeight: 700)
         }
         .windowStyle(.hiddenTitleBar)
+        Window("Library List", id: "list") {
+            LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder).frame(minWidth: 860, minHeight: 560)
+        }
         Window("Set Up Cartridge", id: "setup") {
             SetupView().frame(minWidth: 720, minHeight: 620)
         }
@@ -55,14 +59,7 @@ struct LauncherApp: App {
             MenuBarMenu().environmentObject(library)
         } label: { Image(nsImage: LogoTemplate.image).accessibilityLabel("Cartridge") }
         Settings {
-            TabView {
-                FoldersView().environmentObject(library).tabItem { Label("Library", systemImage: "books.vertical") }
-                BuildSettingsView().environmentObject(builder).tabItem { Label("Building", systemImage: "hammer") }
-                BatterySettingsView().tabItem { Label("Battery", systemImage: "battery.75percent") }
-                HDRSettingsView().tabItem { Label("Display", systemImage: "sun.max") }
-                UpdatesSettingsView().tabItem { Label("Updates", systemImage: "arrow.down.circle") }
-            }
-            .frame(width: 560, height: 400)
+            SettingsShell().environmentObject(library).environmentObject(builder).frame(minWidth: 900, minHeight: 640)
         }
     }
 }
@@ -445,6 +442,8 @@ final class GamepadNav: ObservableObject {
         var back: () -> Void = {}
         var menu: () -> Void = {}
         var home: () -> Void = {}
+        var option: () -> Void = {}   // Y: a game's options
+        var fav: () -> Void = {}      // X: favourite
     }
     private var routes: [Route] = []
     private var base = Route()
@@ -455,16 +454,34 @@ final class GamepadNav: ObservableObject {
     func push(_ r: Route) { routes.append(r) }
     func pop() { if !routes.isEmpty { routes.removeLast() } }
 
+    /// Presses are ignored until then: a second after a controller connects or Cartridge comes to the front, when a controller can report a button as pressed that
+    /// was not pressed here (a controller waking, the state it had in the game). Such a report started a game nobody asked for (A is Play)
+    private var quietUntil = Date()
+    /// Each button's last state as seen here: a press counts only after its release was seen, so a button already held when Cartridge started listening does nothing
+    private var released = Set<ObjectIdentifier>()
+
     init() {
         GCController.shouldMonitorBackgroundEvents = false
         NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] n in
+            self?.quiet()
             if let c = n.object as? GCController { self?.attach(c) }
         }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.quiet() }
+        quiet()
         GCController.controllers().forEach(attach)
     }
-    private func act(_ f: @escaping (Route) -> Void) { DispatchQueue.main.async { if NSApp.isActive { f(self.front) } } }
+    private func quiet() { quietUntil = Date().addingTimeInterval(1) }
+    private func act(_ f: @escaping (Route) -> Void) { DispatchQueue.main.async { if NSApp.isActive && Date() >= self.quietUntil { f(self.front) } } }
     private func press(_ b: GCControllerButtonInput, _ f: @escaping (Route) -> Void) {
-        b.pressedChangedHandler = { [weak self] _, _, p in if p { self?.act(f) } }
+        let id = ObjectIdentifier(b)
+        b.pressedChangedHandler = { [weak self] _, _, p in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if !p { self.released.insert(id); return }
+                guard self.released.contains(id) else { return }   // held since before Cartridge listened
+                self.act(f)
+            }
+        }
     }
     private func attach(_ c: GCController) {
         guard let g = c.extendedGamepad else { return }
@@ -478,6 +495,8 @@ final class GamepadNav: ObservableObject {
         // right one on a Nintendo pad) plays, B goes back. GameController names a Nintendo pad's buttons by their labels too
         press(g.buttonA) { $0.play() }
         press(g.buttonB) { $0.back() }
+        press(g.buttonY) { $0.option() }
+        press(g.buttonX) { $0.fav() }
         let id = ObjectIdentifier(c)
         g.leftThumbstick.yAxis.valueChangedHandler = { [weak self] _, v in
             guard let self else { return }
@@ -583,6 +602,12 @@ struct ConsoleCommand: View {
         Button(router.consoleOpen ? "Exit Console Mode" : "Console Mode") { router.consoleOpen ? router.leaveConsole() : openWindow(id: "console") }
             .keyboardShortcut("k", modifiers: [.command, .shift])
     }
+}
+
+/// View › Library List: the list of Switch games with their pages, as Cartridge showed them before the shelf
+struct ListCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View { Button("Library List") { openWindow(id: "list") }.keyboardShortcut("l", modifiers: [.command, .shift]) }
 }
 
 /// A new build's first start: macOS checks the whole app before it runs (longer the larger the game), with no window meanwhile, so the wait is explained here
