@@ -294,17 +294,13 @@ static _Atomic int g_up_pending;
 
 // macOS revokes a process's GPU access after GPU hangs or faults it caused: from then on every command buffer comes back MTL4CommandQueueErrorAccessRevoked ("Ignored (for causing
 // prior/excessive GPU errors)", kIOGPUCommandBufferCallbackErrorSubmissionsIgnored) without running, the GPU signals no fence again and nothing is drawn; the game in #1326 ran about
-// 70 s like that before it aborted, and in full screen WindowServer froze. The first one stops the game: presents stop, the front end closes the game, and the shared event a game's
-// SyncWait waits on (for up to an hour, mtl_wait_at) is raised from the CPU to each fence whose feedback has come back. The feedback still comes, promptly, so g_done moves as
-// before and no command allocator is reset before Metal has handed its command buffer back. A hang or a fault alone is not enough: the GPU recovers from those, and a command buffer
-// discarded as the victim of another's error comes back with a timeout too while the game goes on, as it did in #1326's second run
+// 70 s like that before it aborted, and in full screen WindowServer froze. The first one stops the game: presents stop and the front end closes the game, while post_complete raises
+// the shared event (g_ev) from the CPU to every fence whose feedback has come back (covering both revoked access and recoverable GPU errors). The feedback still comes, promptly, so
+// g_done moves as before and no command allocator is reset before Metal has handed its command buffer back. A hang or a fault alone is not enough: the GPU recovers from those, and a
+// command buffer discarded as the victim of another's error comes back with a timeout too while the game goes on, as it did in #1326's second run
 static _Atomic int g_gpu_lost;
 void front_gpu_lost(void);
 __attribute__((weak)) void front_gpu_lost(void) { MDIE("GPU access revoked: macOS runs none of this process's GPU work any more"); }   // the Mac front end leaves full screen, says why and quits
-static void gpu_lost_release(void) {
-    static os_unfair_lock lk = OS_UNFAIR_LOCK_INIT;   // never lower it
-    os_unfair_lock_lock(&lk); uint64_t f = atomic_load(&g_done); if (g_ev && g_ev.signaledValue < f) g_ev.signaledValue = f; os_unfair_lock_unlock(&lk);
-}
 // Metal 4 reports a commit's error as MTL4CommandQueueErrorTimeout with no text, and the command buffer's own error underneath (NSUnderlyingErrorKey, NSMultipleUnderlyingErrorsKey):
 // every command buffer error in both #1326 logs has that shape. Only this domain counts: an innocent victim's IOGPU error underneath has code 5 too
 static int gpu_err_has(NSError *e, NSInteger code, int depth) {
@@ -317,7 +313,6 @@ static void gpu_lost_check(NSError *e, const char *where) {
     if (!e || atomic_load(&g_gpu_lost) || !gpu_err_has(e, MTL4CommandQueueErrorAccessRevoked, 0) || atomic_exchange(&g_gpu_lost, 1)) return;
     MLOG("[RED] GPU access revoked: the %s command buffer was ignored (fences back %llu of %llu); macOS runs none of this process's GPU work any more, so the game stops", where,
          (unsigned long long)atomic_load(&g_done), (unsigned long long)atomic_load(&g_fence));
-    gpu_lost_release();
     front_gpu_lost();
 }
 // DM_TEST_GPU_LOST=n (for testing): from the n-th submission on, imitate the revoked access without faulting the GPU: each submission's feedback reports it, in the shape the #1326
@@ -3062,36 +3057,63 @@ static void gpu_capture_frame(uint64_t f) {
 }
 void mtl_set_frame(uint64_t f) { atomic_store(&g_cur_frame, f); if (g_ub_n) ub_frame(f); if (ab_len()) ab_frame(f); gpu_capture_frame(f); }
 // GPU timing registration: gpu_tag_begin(frame) before commit, gpu_tag_done(frame, GPU start, GPU end) on completion (seconds on the CACurrentMediaTime base).
+// g_gpu[k].frame stores frame + 1 (0 = empty slot, distinct from frame 0). When a new frame claims slot k, frame is cleared to 0 while fields reset and published with pending = 1
+// last (release), so readers never observe a newly claimed slot with pending = 0.
 // Old-queue command buffers go through gpu_tag_f; the Metal 4 main submission backfills in the feedback of mtl_sub_commit (when switching to Metal 4 all the call sites were lost and the GPU column of the timing line became empty)
 static void gpu_tag_begin(uint64_t f) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f) { atomic_store(&g_gpu[k].frame, f); atomic_store(&g_gpu[k].ns, 0); atomic_store(&g_gpu[k].pending, 0); atomic_store(&g_gpu[k].t0, UINT64_MAX); atomic_store(&g_gpu[k].t1, 0); }
-    atomic_fetch_add(&g_gpu[k].pending, 1);
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_relaxed) != tag) {
+        atomic_store_explicit(&g_gpu[k].frame, 0, memory_order_release);
+        atomic_store_explicit(&g_gpu[k].ns, 0, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].t0, UINT64_MAX, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].t1, 0, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].pending, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_gpu[k].frame, tag, memory_order_release);
+        return;
+    }
+    atomic_fetch_add_explicit(&g_gpu[k].pending, 1, memory_order_acq_rel);
 }
 static void gpu_tag_done(uint64_t f, double g0, double g1) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f) return;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return;
     double d = g1 - g0;
     if (d > 0 && g0 > 0) {   // a command buffer can complete with no start time (0, while a movie's frames upload each frame in Big Brain Academy: Brain vs. Brain), and its span would be the whole clock
-        atomic_fetch_add(&g_gpu[k].ns, (uint64_t)(d * 1e9));
+        atomic_fetch_add_explicit(&g_gpu[k].ns, (uint64_t)(d * 1e9), memory_order_relaxed);
         uint64_t s0 = (uint64_t)(g0 * 1e9), s1 = (uint64_t)(g1 * 1e9), v;
-        for (v = atomic_load(&g_gpu[k].t0); s0 < v && !atomic_compare_exchange_weak(&g_gpu[k].t0, &v, s0);) {}
-        for (v = atomic_load(&g_gpu[k].t1); s1 > v && !atomic_compare_exchange_weak(&g_gpu[k].t1, &v, s1);) {}
+        for (v = atomic_load_explicit(&g_gpu[k].t0, memory_order_relaxed); s0 < v && !atomic_compare_exchange_weak_explicit(&g_gpu[k].t0, &v, s0, memory_order_relaxed, memory_order_relaxed);) {}
+        for (v = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed); s1 > v && !atomic_compare_exchange_weak_explicit(&g_gpu[k].t1, &v, s1, memory_order_relaxed, memory_order_relaxed);) {}
     }
-    atomic_fetch_sub(&g_gpu[k].pending, 1);
+    atomic_fetch_sub_explicit(&g_gpu[k].pending, 1, memory_order_release);
 }
 static void gpu_tag_f(id<MTLCommandBuffer> cb, uint64_t f) { gpu_tag_begin(f); [cb addCompletedHandler:^(id<MTLCommandBuffer> c) { gpu_tag_done(f, c.GPUStartTime, c.GPUEndTime); }]; }
 void gpu_tag(id<MTLCommandBuffer> cb) { gpu_tag_f(cb, atomic_load(&g_cur_frame)); }
 double mtl_gpu_ms(uint64_t f) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending)) return -1;
-    return atomic_load(&g_gpu[k].ns) / 1e6;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    if (atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire)) return -1;
+    uint64_t ns = atomic_load_explicit(&g_gpu[k].ns, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    return ns / 1e6;
 }
 int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1) {
-    unsigned k = f % GRING;
-    if (atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending)) return 0;
-    *t0 = atomic_load(&g_gpu[k].t0); *t1 = atomic_load(&g_gpu[k].t1);
-    return *t1 >= *t0 && *t1;
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return 0;
+    if (atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire)) return 0;
+    uint64_t s0 = atomic_load_explicit(&g_gpu[k].t0, memory_order_relaxed), s1 = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return 0;
+    *t0 = s0; *t1 = s1;
+    return s1 >= s0 && s1;
+}
+// For the layer's frame history (hle_vi.c): 1 once all of the frame's command buffers have completed, with their latest GPU end (0 if none had a time), 0 while some are still
+// running, -1 when the ring holds no record of the frame (no GPU work tagged with it, or overwritten)
+int mtl_gpu_done(uint64_t f, uint64_t *t1) {
+    unsigned k = f % GRING; uint64_t tag = f + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    int pend = atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire);
+    uint64_t end = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    if (pend) return 0;
+    *t1 = end; return 1;
 }
 static void rp_flush_at(const char *fn, int line);
 #define rp_flush() rp_flush_at(__func__, __LINE__)
@@ -3166,6 +3188,15 @@ static void post_run(post_rec *r, uint64_t c0, uint64_t c1) {
     pthread_mutex_unlock(&g_post_mu);
     }
 }
+// Keep g_ev at least at g_done so fast-wake waits and event listeners wake as soon as feedback completes a fence,
+// even when Metal finishes a failed command buffer without executing rec_signal(g_ev, fence) (recoverable errors or revoked access).
+static void fence_ev_raise(uint64_t f) {
+    if (!g_ev || g_ev.signaledValue >= f) return;
+    static os_unfair_lock lk = OS_UNFAIR_LOCK_INIT;   // never lower it
+    os_unfair_lock_lock(&lk);
+    if (g_ev && g_ev.signaledValue < f) g_ev.signaledValue = f;
+    os_unfair_lock_unlock(&lk);
+}
 // Both GPU feedback and an early waiter complete records in submission order.
 // Delayed callbacks carry their fence, never the identity of a recyclable slot.
 static void post_complete(uint64_t fence, uint64_t c0, uint64_t c1) {
@@ -3181,8 +3212,10 @@ static void post_complete(uint64_t fence, uint64_t c0, uint64_t c1) {
         post_run(r, f == fence && c1 ? c0 : seg_ts() ? start : 0, f == fence && c1 ? c1 : seg_ts() ? now : 0);
     }
     pthread_mutex_lock(&g_mu); if (fence > g_done) g_done = fence;
-    uint32_t *scr = atomic_load(&g_mesh_scr); if (scr) __atomic_store_n(scr + DMSH_MESH_SCRATCH_DONE, (uint32_t)g_done, __ATOMIC_RELAXED);   // the slices of groups this fence cut off are free again
+    uint64_t done = g_done;
+    uint32_t *scr = atomic_load(&g_mesh_scr); if (scr) __atomic_store_n(scr + DMSH_MESH_SCRATCH_DONE, (uint32_t)done, __ATOMIC_RELAXED);   // the slices of groups this fence cut off are free again
     pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
+    fence_ev_raise(done);
     nvn_queue_gpu_progress();
 }
 static uint64_t g_sub_ready;   // mtl_sub_ready, for the submission being encoded
@@ -3249,7 +3282,6 @@ uint64_t mtl_sub_commit(void) {
         char where[64]; snprintf(where, sizeof where, "fence %llu, its last command buffer", (unsigned long long)fence); cbs_feedback(cbs, cb.error, where);
         gpu_lost_check(lost_test ? gpu_lost_test_error() : cb.error, "submission");
         post_complete(fence, c0, c1);
-        if (atomic_load(&g_gpu_lost)) gpu_lost_release();   // the GPU signals none of these fences
         defer_drain(); defer_idle_commit();
     }];
     void arena_commit(uint64_t fence); arena_commit(fence);
@@ -3284,6 +3316,7 @@ static int fast_wake(void) { static int v = -1; if (v < 0) { const char *e = get
 // A SyncWait woken by the GPU's signal: the CPU-side writes of every submission up to the fence that no feedback handler has run yet, run here. The fence's last segment ended
 // now (c1); it started at the later of its commit and the previous segment's end (c0), as near as the CPU can tell without its feedback
 static void post_early(uint64_t fence) {
+    if (atomic_load_explicit(&g_done, memory_order_acquire) >= fence) return;
     post_complete(fence, 0, 0);
 }
 static int mtl_wait_at(uint64_t fence, uint64_t timeout_ns, int site) {
@@ -3294,12 +3327,17 @@ static int mtl_wait_at(uint64_t fence, uint64_t timeout_ns, int site) {
         uint64_t ms = timeout_ns / 1000000ull; if (ms > 3600000ull) ms = 3600000ull;
         if ([g_ev waitUntilSignaledValue:fence timeoutMS:ms]) post_early(fence);
         int ok = g_done >= fence;
-        if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
-        if (ok || timeout_ns < 1000000ull) return ok;
+        if (ok || timeout_ns < 1000000ull) {
+            if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
+            return ok;
+        }
         // The event and feedback waits share a finite budget; a timeout must not buy another full wait.
         if (timeout_ns != UINT64_MAX) {
             uint64_t used = ws_t0() - w0;
-            if (used >= timeout_ns) return 0;
+            if (used >= timeout_ns) {
+                if (ws_on()) { ws_put(site, w0, 1); ws_wake(fence); }
+                return 0;
+            }
             timeout_ns -= used;
         }
     }
@@ -22020,11 +22058,11 @@ static int link_latch_on(void) {
 // (external Vulkan / GL producers or synthetic tests with no NVN draw submissions). Uses g_gpu[frame % GRING], whose t1 shares the CACurrentMediaTime base with wk_cb
 static double link_gpu_lead(uint64_t frame, double t_in, double cb, double wk_cb, double pres_gpu, int external) {
     if (external || wk_cb < 0) return -1;
-    unsigned k = frame % GRING;
-    if (atomic_load(&g_gpu[k].frame) != frame) return -1;
-    int pend = atomic_load(&g_gpu[k].pending);
-    uint64_t t1 = atomic_load(&g_gpu[k].t1);
-    if (atomic_load(&g_gpu[k].frame) != frame) return -1;
+    unsigned k = frame % GRING; uint64_t tag = frame + 1;
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
+    int pend = atomic_load_explicit(&g_gpu[k].pending, memory_order_acquire);
+    uint64_t t1 = atomic_load_explicit(&g_gpu[k].t1, memory_order_relaxed);
+    if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return -1;
     double end;
     if (pend) end = cb;
     else if (t1) end = t1 / 1e9;
