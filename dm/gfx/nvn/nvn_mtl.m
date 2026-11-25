@@ -13,6 +13,7 @@
 #include <sys/mman.h>
 #include <sys/sysctl.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <sys/file.h>   // flock: the lock beside Metal's build folders (ga_claim)
 #include <TargetConditionals.h>
 #if TARGET_OS_OSX
@@ -3099,11 +3100,17 @@ static void gpu_tag_begin(uint64_t f) {
     }
     atomic_fetch_add_explicit(&g_gpu[k].pending, 1, memory_order_acq_rel);
 }
+// Valid completed GPU interval from Metal feedback: finite, positive, ordered, and already elapsed on Metal's clock.
+// Missing start times (0, Big Brain Academy) or faulted command buffers (unwritten UINT64_MAX tick sentinel ≈ 6.15e9 s
+// on Apple Silicon's 125/3 timebase) would otherwise poison frame/upload durations, spans, mtl_gpu_done, and integer casts.
+static inline int gpu_time_valid(double g0, double g1) {
+    return isfinite(g0) && isfinite(g1) && g0 > 0 && g1 > g0 && g1 <= CACurrentMediaTime();
+}
 static void gpu_tag_done(uint64_t f, double g0, double g1) {
     unsigned k = f % GRING; uint64_t tag = f + 1;
     if (atomic_load_explicit(&g_gpu[k].frame, memory_order_acquire) != tag) return;
-    double d = g1 - g0;
-    if (d > 0 && g0 > 0) {   // a command buffer can complete with no start time (0, while a movie's frames upload each frame in Big Brain Academy: Brain vs. Brain), and its span would be the whole clock
+    if (gpu_time_valid(g0, g1)) {
+        double d = g1 - g0;
         atomic_fetch_add_explicit(&g_gpu[k].ns, (uint64_t)(d * 1e9), memory_order_relaxed);
         uint64_t s0 = (uint64_t)(g0 * 1e9), s1 = (uint64_t)(g1 * 1e9), v;
         for (v = atomic_load_explicit(&g_gpu[k].t0, memory_order_relaxed); s0 < v && !atomic_compare_exchange_weak_explicit(&g_gpu[k].t0, &v, s0, memory_order_relaxed, memory_order_relaxed);) {}
@@ -3533,6 +3540,29 @@ void mtl_tex_init(const tex_t *t) {
     own_tex_live_put_locked(t);
     if (desc) free(nvn_hm_put(&g_image_desc, &t->serial, desc));
     pthread_mutex_unlock(&g_smu);
+}
+__attribute__((weak)) void *dm_gl_retain_texture_2d(uint32_t name) { (void)name; return NULL; }
+int mtl_tex_init_gl(tex_t *t, uint32_t name) {
+    @autoreleasepool {
+        id<MTLTexture> tex = (__bridge_transfer id<MTLTexture>)dm_gl_retain_texture_2d(name);
+        NVNformat format;
+        switch (tex.pixelFormat) {
+            case MTLPixelFormatRGBA8Unorm: format = NVN_FORMAT_RGBA8; break;
+            case MTLPixelFormatRGBA8Unorm_sRGB: format = NVN_FORMAT_RGBA8_SRGB; break;
+            case MTLPixelFormatR8Unorm: format = NVN_FORMAT_R8; break;
+            case MTLPixelFormatRG8Unorm: format = NVN_FORMAT_RG8; break;
+            default: MLOG("[RED] NVN texture import: unsupported GL texture %u (Metal format %lu)", name, (unsigned long)tex.pixelFormat); return 0;
+        }
+        t->d = (nvn_texdesc){
+            .target = NVN_TEXTURE_TARGET_2D, .format = format,
+            .width = (uint32_t)tex.width, .height = (uint32_t)tex.height,
+            .depth = 1, .levels = (uint32_t)tex.mipmapLevelCount,
+        };
+        mtl_tex_init(t);
+        res_add(tex);
+        tex_put(t->serial, tex);
+        return 1;
+    }
 }
 // Host record of a packaged texture: the current MTLTexture, the upload stamp, and the global write generation at the last check
 // spare: the texture the last re-upload replaced, kept resident and written by the next re-upload once the GPU has passed spare_fence (a texture the CPU rewrites every frame, a movie frame,
@@ -4172,8 +4202,8 @@ static void up_flush(void) {
             own_epoch();   // Make the view cache of every texture ID take the slow path once (on a cache hit tex_mtl is not passed through and this record is not seen)
             MLOG("%supload command buffer dropped: the %lu textures of this batch are marked unwritten and re-uploaded on next use (%d awaiting re-upload)", fake_lost ? "DM_TEST_UP_LOST: " : "", (unsigned long)dsts.count, n);
         }
-        double d = f.GPUEndTime - f.GPUStartTime;
-        if (d > 0) atomic_fetch_add(&g_upload_gpu_ns, (uint64_t)(d * 1e9));
+        double g0 = f.GPUStartTime, g1 = f.GPUEndTime;
+        if (gpu_time_valid(g0, g1)) atomic_fetch_add(&g_upload_gpu_ns, (uint64_t)((g1 - g0) * 1e9));
         @autoreleasepool { [views removeAllObjects]; }   // upload-only integer views share their targets' residency
         if (staging.count) {
             // Keep the slot busy through retirement to bound staging memory during a burst.
@@ -11795,19 +11825,99 @@ static NSString *ga_dir(void) {
     return dir;
 }
 static int ga_own(void) { return NSBundle.mainBundle.bundleIdentifier.length > 0 && ga_dir() != nil; }   // the folder is this game's app's, not every program's
-static NSSet<NSString *> *ga_list(NSString *dir) {
-    NSArray<NSString *> *a = dir ? [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil] : nil;
-    return [NSSet setWithArray:[a filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self BEGINSWITH 'gpuarchiver-'"]] ?: @[]];
+// Each snapshotted gpuarchiver-* directory carries its (dev, ino) identity so background removal never deletes a file, symlink, or replacement directory with the same name.
+@interface GaDir : NSObject { @public NSString *name; dev_t dev; ino_t ino; } @end
+@implementation GaDir @end
+static NSArray<GaDir *> *ga_list(NSString *dir) {
+    if (!dir) return @[];
+    int dfd = open(dir.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dfd < 0) return @[];
+    DIR *dp = fdopendir(dfd);
+    if (!dp) { close(dfd); return @[]; }
+    int rfd = dirfd(dp);
+    NSMutableArray<GaDir *> *out = [NSMutableArray array];
+    struct dirent *de;
+    while ((de = readdir(dp))) {
+        if (strncmp(de->d_name, "gpuarchiver-", 12)) continue;
+        struct stat st;
+        if (fstatat(rfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(st.st_mode)) continue;   // skip files and symlinks; Metal's state is a directory
+        NSString *name = [NSFileManager.defaultManager stringWithFileSystemRepresentation:de->d_name length:strlen(de->d_name)];
+        if (!name) continue;
+        GaDir *g = [GaDir new]; g->name = name; g->dev = st.st_dev; g->ino = st.st_ino;
+        [out addObject:g];
+    }
+    closedir(dp);
+    return out;
+}
+// Recursively empty an already-opened directory fd without following symlinks; always consumes fd. Returns 1 when every entry was removed (or already gone).
+static int ga_rmtree_fd(int fd, int depth) {
+    if (depth > 64) { close(fd); return 0; }
+    DIR *dp = fdopendir(fd);
+    if (!dp) { close(fd); return 0; }
+    int dfd = dirfd(dp), ok = 1;
+    for (;;) {
+        int saw = 0, unlinked = 0;
+        struct dirent *de;
+        while ((de = readdir(dp))) {
+            if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+            saw = 1;
+            struct stat st;
+            if (fstatat(dfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW)) {
+                if (errno != ENOENT) ok = 0;
+                continue;
+            }
+            if (S_ISDIR(st.st_mode)) {
+                int sub = openat(dfd, de->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                if (sub < 0) {
+                    if (errno != ENOENT) ok = 0;
+                    continue;
+                }
+                if (!ga_rmtree_fd(sub, depth + 1)) ok = 0;
+                if (!unlinkat(dfd, de->d_name, AT_REMOVEDIR)) unlinked = 1;
+                else if (errno != ENOENT) ok = 0;
+            } else {
+                if (!unlinkat(dfd, de->d_name, 0)) unlinked = 1;
+                else if (errno != ENOENT) ok = 0;
+            }
+        }
+        if (!saw || !unlinked) break;
+        rewinddir(dp);
+    }
+    closedir(dp);
+    return ok;
+}
+static int ga_remove(NSString *dir, NSArray<GaDir *> *old) {
+    if (!dir || !old.count) return 0;
+    int dfd = open(dir.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dfd < 0) return 0;
+    int removed = 0;
+    for (GaDir *g in old) {
+        const char *name = g->name.fileSystemRepresentation;
+        if (!name || strncmp(name, "gpuarchiver-", 12) || strchr(name, '/')) continue;
+        int cfd = openat(dfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (cfd < 0) continue;   // gone, or replaced by a file or symlink
+        struct stat st;
+        if (fstat(cfd, &st) || !S_ISDIR(st.st_mode) || st.st_dev != g->dev || st.st_ino != g->ino) {
+            close(cfd);   // replaced by a different directory with the same name
+            continue;
+        }
+        if (!ga_rmtree_fd(cfd, 0)) continue;   // consumes cfd
+        // Recheck (dev, ino) before removing the directory entry itself; AT_REMOVEDIR also refuses non-empty dirs, files, and symlinks.
+        if (fstatat(dfd, name, &st, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(st.st_mode) || st.st_dev != g->dev || st.st_ino != g->ino) continue;
+        if (!unlinkat(dfd, name, AT_REMOVEDIR)) removed++;
+    }
+    close(dfd);
+    return removed;
 }
 // The lock beside dir, held shared from here on through *fd (left open for the run: the lock ends with the process, a forked child sharing it). → the folders of earlier runs
 // to remove, when no other copy holds the lock; nil otherwise. Listed under the exclusive lock, before this process makes a serializer: a copy starting meanwhile waits for the
 // listing at its shared lock, so no folder of a running copy is ever among them. A copy that cannot take the lock at all removes nothing and goes on unprotected
-static NSSet<NSString *> *ga_claim(NSString *dir, int *fd) {
+static NSArray<GaDir *> *ga_claim(NSString *dir, int *fd) {
     *fd = -1;
     if (!dir || ![NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil]) return nil;
     int f = open([dir.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"gpuarchiver.lock"].fileSystemRepresentation, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (f < 0) return nil;
-    NSSet<NSString *> *old = flock(f, LOCK_EX | LOCK_NB) ? nil : ga_list(dir);
+    NSArray<GaDir *> *old = flock(f, LOCK_EX | LOCK_NB) ? nil : ga_list(dir);
     int r; while ((r = flock(f, LOCK_SH)) && errno == EINTR) {}   // from the exclusive lock, or after a starting copy's listing
     if (r) { close(f); return nil; }
     *fd = f;
@@ -12201,11 +12311,11 @@ static void pso4_init_once(void) {
             g_arch_q = dispatch_queue_create("dm.nvn.pso-archive", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
             g_arch_pending = dispatch_group_create();
             if (ga_own()) {   // before the first serializer (ep_new below): this run's folder is never among them
-                static int lock_fd; NSString *gd = ga_dir(); NSSet<NSString *> *old = ga_claim(gd, &lock_fd);
+                static int lock_fd; NSString *gd = ga_dir(); NSArray<GaDir *> *old = ga_claim(gd, &lock_fd);
                 if (lock_fd < 0) MLOG("[RED] pipeline archive: no lock beside %s: Metal's build folders there are left alone this run, and this run's may go with another copy's start", gd.UTF8String);
                 else if (!old) MLOG("pipeline archive: another copy of this app is running: Metal's build folders in %s are left alone", gd.UTF8String);
                 if (old.count) dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                    uint64_t t0 = bp_now(); int n = 0; for (NSString *name in old) n += [NSFileManager.defaultManager removeItemAtPath:[gd stringByAppendingPathComponent:name] error:nil];
+                    uint64_t t0 = bp_now(); int n = ga_remove(gd, old);
                     MLOG("pipeline archive: %d of %lu of Metal's build folders left by earlier runs removed from %s in %.1f s", n, (unsigned long)old.count, gd.UTF8String, (bp_now() - t0) / 1e9);
                 });
             }
@@ -22877,6 +22987,11 @@ void mtl_present_discard(int on) { atomic_store(&g_present_discard, on != 0); if
 static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4], uint64_t ev_val, uint64_t *copy);
 uint64_t mtl_present(const tex_t *t, double period, const int crop[4], uint64_t *copy) { return present_enqueue(t, period, crop, 0, copy); }
 void *mtl_device(void) { mtl_init(); return (__bridge void *)g_dev; }
+void *mtl_nvn_event(void) { return (__bridge void *)g_ev; }
+void mtl_wait_gl_event(void *event, uint64_t value) {
+    id<MTLSharedEvent> ev = (__bridge id<MTLSharedEvent>)event;
+    if (value > ev.signaledValue) rec_queue_block(^{ [g_q4 waitForEvent:ev value:value]; });
+}
 // GL and Vulkan also accept a device without Metal 4. The classic fallback drops presents.
 void *mtl_device_classic(void) {
     atomic_store_explicit(&g_classic_ok, 1, memory_order_relaxed);
