@@ -106,7 +106,15 @@ struct ShellView: View {
             if console, let w { ConsoleWindow.fullScreen(w) }
         })
         .ignoresSafeArea()
-        .sheet(item: $options) { t in OptionsPanel(title: t, close: { options = nil }, pages: { options = nil; cartridgePages = t }) }
+        .sheet(item: $options) { t in OptionsPanel(title: t, close: { options = nil }, pages: { options = nil; cartridgePages = t },
+                                                       rebuild: { all in
+                                                           options = nil
+                                                           // after the sheet is gone: a rebuild with no source asks for one in an open panel
+                                                           DispatchQueue.main.async {
+                                                               if all { rebuildAll(library.games, library: library, builder: builder) { openWindow(id: "build") } }
+                                                               else if let g = t.game { rebuildGame(g, builder: builder) { openWindow(id: "build") } }
+                                                           }
+                                                       }) }
         .sheet(item: $cartridgePages) { t in
             if let g = t.game {
                 CartridgePages(game: g, close: { cartridgePages = nil }).environmentObject(library).environmentObject(builder).frame(minWidth: 900, minHeight: 680)
@@ -649,6 +657,7 @@ struct OptionsPanel: View {
     let title: Title
     let close: () -> Void
     let pages: () -> Void
+    let rebuild: (_ all: Bool) -> Void   // this Switch game, or every one (after a Cartridge update whose engine is newer)
     @State private var choosing = false
     @ObservedObject private var titles = Titles.shared
     @ObservedObject private var details = DetailsStore.shared
@@ -657,6 +666,10 @@ struct OptionsPanel: View {
             Text(title.name).font(.custom("Avenir Next", size: 26).weight(.heavy))
             Text(title.platform).foregroundStyle(.secondary).padding(.bottom, 8)
             if title.hasCartridgePages { row("slider.horizontal.3", "Settings, mods, cheats, controls and saves", pages) }
+            if let g = title.game, !Library.shared.running.contains(g.id) {
+                row("hammer", "Rebuild") { rebuild(false) }
+                row("hammer.circle", "Rebuild All Switch Games") { rebuild(true) }
+            }
             row(titles.favorites.contains(title.id) ? "heart.slash" : "heart", titles.favorites.contains(title.id) ? "Remove from Favorites" : "Add to Favorites") { titles.toggleFavorite(title); close() }
             if let f = title.app ?? title.folder { row("folder", "Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([f]); close() } }
             if let s = details.details(title)?.storePage, let u = URL(string: s) { row("bag", "Store page") { NSWorkspace.shared.open(u); close() } }
