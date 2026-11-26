@@ -1,7 +1,7 @@
 // Cartridge (nxnative's Mac launcher): a library of the nxnative Mac apps the player built, with each game's settings, mods, cheats, controls and saves, and Play. Built by scripts/build_launcher.py.
 // It writes only what each app reads by itself (docs/frontends.md): the saved choices in the app's preferences, mods.txt, the cheat files, the controls files and the cloud
 // saves folder, so a game started from Finder or the Dock plays as it does from here. A controller drives the library: up and down pick a game, A plays it, B goes back to all
-// games, L and R change the page, Menu opens console mode (Console.swift).
+// games, L and R change the page, Menu opens console mode (the shelf full screen, Router.showConsole).
 import AppKit
 import GameController
 import SwiftUI
@@ -17,7 +17,8 @@ struct LauncherApp: App {
     @AppStorage("menuBar") private var menuBar = true
 
     var body: some Scene {
-        WindowGroup("Cartridge", id: "library") {
+        // One shelf window (a Window, not a WindowGroup): Router.home is the shelf, and window restoration brought back copies of a WindowGroup's
+        Window("Cartridge", id: "library") {
             ShellView().environmentObject(library).environmentObject(pad).environmentObject(builder)
                 .frame(minWidth: 1100, minHeight: 700)
                 .modifier(SetupOnFirstStart())
@@ -37,10 +38,6 @@ struct LauncherApp: App {
                 ListCommand()
             }
         }
-        Window("Console Mode", id: "console") {
-            ShellView(console: true).environmentObject(library).environmentObject(pad).environmentObject(builder).frame(minWidth: 1100, minHeight: 700)
-        }
-        .windowStyle(.hiddenTitleBar)
         Window("Library List", id: "list") {
             LibraryView().environmentObject(library).environmentObject(pad).environmentObject(builder).frame(minWidth: 860, minHeight: 560)
         }
@@ -156,7 +153,7 @@ struct LibraryView: View {
                     } label: { Label("Build", systemImage: "hammer") } primaryAction: { openWindow(id: "build") }
                     .help("Build a game (click), or rebuild every game after an nxnative update (hold)")
                 }
-                ToolbarItem { Button { openWindow(id: "console") } label: { Label("Console Mode", systemImage: "tv") }.help("Console mode: the library full screen, for a controller (⇧⌘K)") }
+                ToolbarItem { Button { Router.shared.showConsole() } label: { Label("Console Mode", systemImage: "tv") }.help("Console mode: the shelf full screen, for a controller (⇧⌘K)") }
                 ToolbarItem { Button { openWindow(id: "devices") } label: { Label("Install on iPhone or iPad", systemImage: "iphone.and.arrow.forward") } }
                 ToolbarItem { Button { addFolder(library) } label: { Label("Add Folder", systemImage: "folder.badge.plus") } }
                 ToolbarItem { Button { library.scan() } label: { Label("Refresh", systemImage: "arrow.clockwise") } }
@@ -186,8 +183,8 @@ struct LibraryView: View {
             },
             play: { if let g = selected { library.play(g) } },
             back: { selection = homeID },
-            menu: { openWindow(id: "console") },
-            home: { openWindow(id: "console") }))
+            menu: { Router.shared.showConsole() },
+            home: { Router.shared.showConsole() }))
     }
 }
 
@@ -599,7 +596,7 @@ struct ConsoleCommand: View {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject private var router = Router.shared
     var body: some View {
-        Button(router.consoleOpen ? "Exit Console Mode" : "Console Mode") { router.consoleOpen ? router.leaveConsole() : openWindow(id: "console") }
+        Button(router.consoleOpen ? "Exit Console Mode" : "Console Mode") { router.toggleConsole() }
             .keyboardShortcut("k", modifiers: [.command, .shift])
     }
 }

@@ -8,7 +8,6 @@ import GameController
 import SwiftUI
 
 struct ShellView: View {
-    var console = false   // the console-mode window: full screen, B leaves it
     @EnvironmentObject var library: Library
     @EnvironmentObject var pad: GamepadNav
     @EnvironmentObject var builder: Builder
@@ -17,6 +16,7 @@ struct ShellView: View {
     @ObservedObject private var music = MusicPlayer.shared
     @ObservedObject private var sessions = Sessions.shared
     @ObservedObject private var covers = Covers.shared
+    @ObservedObject private var router = Router.shared   // console mode: the window full screen
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @Environment(\.dismissWindow) private var dismissWindow
@@ -102,8 +102,7 @@ struct ShellView: View {
         .background(WindowFinder { w in
             guard window !== w else { return }
             window = w
-            if let w { active = w.occlusionState.contains(.visible) }
-            if console, let w { ConsoleWindow.fullScreen(w) }
+            if let w { active = w.occlusionState.contains(.visible); Router.shared.homeAppeared(w) }
         })
         .ignoresSafeArea()
         .sheet(item: $options) { t in OptionsPanel(title: t, close: { options = nil }, pages: { options = nil; cartridgePages = t },
@@ -125,6 +124,12 @@ struct ShellView: View {
         .onReceive(Timer.publish(every: 180, on: .main, in: .common).autoconnect()) { _ in if active, sheet < 0.5, let t = current { details.nextWall(t) } }
         // the wallpaper moves while its window can be seen, in front or not (Cartridge on one screen while another app is used): only a covered or minimised
         // window stops it, which is when its drawing would be wasted
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { n in if let w = n.object as? NSWindow, w === window { Router.shared.consoleOpen = true } }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { n in if let w = n.object as? NSWindow, w === window { Router.shared.consoleOpen = false } }
+        .onReceive(Router.shared.$focus) { tid in   // a link's game (a tap of Home in it): chosen on the shelf, the page down
+            guard let tid, let t = shelf.first(where: { $0.game?.titleID == tid }) else { return }
+            Router.shared.focus = nil; pageRequest = "home"; choose(t, sound: false)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { n in
             if let w = n.object as? NSWindow, w === window { active = w.occlusionState.contains(.visible) }
         }
@@ -173,12 +178,12 @@ struct ShellView: View {
             }
             Spacer()
             HStack(spacing: 16) {
-                if console { Button { leave() } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Leave console mode (Esc, or B)") }
-                else { Button { openSettings() } label: { Image(systemName: "gearshape.fill") }.buttonStyle(.plain).help("Settings (⌘,)") }
+                if router.consoleOpen { Button { router.leaveConsole() } label: { Image(systemName: "arrow.down.right.and.arrow.up.left") }.buttonStyle(.plain).help("Leave console mode (Esc, B or ⇧⌘K)") }
+                Button { openSettings() } label: { Image(systemName: "gearshape.fill") }.buttonStyle(.plain).help("Settings (⌘,)")
                 Wordmark(size: 13)
             }.font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
         }
-        .padding(.leading, 110).padding(.trailing, 48).padding(.top, console ? 28 : 40)
+        .padding(.leading, 110).padding(.trailing, 48).padding(.top, router.consoleOpen ? 28 : 40)
     }
 
     private var rail: some View {
@@ -267,13 +272,8 @@ struct ShellView: View {
         filter = f[(i + d + f.count) % f.count]; UISound.move.play()
     }
     private func back() {
-        if sheet > 0.05 { pageRequest = "home"; UISound.back.play() } else if console { leave() }
-    }
-    private func leave() {
-        UISound.back.play()
-        guard let w = window, w.styleMask.contains(.fullScreen) else { dismissWindow(id: "console"); return }
-        w.toggleFullScreen(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { dismissWindow(id: "console") }
+        if sheet > 0.05 { pageRequest = "home"; UISound.back.play() }
+        else if window?.styleMask.contains(.fullScreen) == true { UISound.back.play(); Router.shared.leaveConsole() }   // console mode leaves, as its B did
     }
 
     private func attach() {
@@ -287,7 +287,7 @@ struct ShellView: View {
             home: { if let t = shelf.first(where: { titles.isRunning($0) }) { titles.play(t) } },
             option: { if let t = current { showOptions(t) } },
             fav: favorite)
-        if console { pad.push(route); Router.shared.consoleOpen = true; Router.shared.leaveConsole = leave } else { pad.setBase(route) }
+        pad.setBase(route)
         Router.shared.attach(openWindow)
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
             guard e.window === window, e.window?.attachedSheet == nil, !(e.window?.firstResponder is NSTextView) else { return e }
@@ -310,7 +310,6 @@ struct ShellView: View {
         }
     }
     private func detach() {
-        if console { pad.pop(); Router.shared.consoleOpen = false; Router.shared.leaveConsole = {} }
         if let keys { NSEvent.removeMonitor(keys) }
         keys = nil
     }
@@ -703,7 +702,7 @@ struct CartridgePages: View {
 }
 
 enum ConsoleWindow {
-    /// Console mode's window, full screen once it exists; should macOS refuse (another app full screen on this display), it covers the screen instead
+    /// The shelf's window full screen (console mode), brought forward; should macOS refuse (another app full screen on this display), it covers the screen instead
     static func fullScreen(_ w: NSWindow) {
         w.backgroundColor = .black; w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden
         w.collectionBehavior.insert(.fullScreenPrimary); w.styleMask.insert(.resizable)

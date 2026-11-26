@@ -23,7 +23,7 @@ struct MenuBarMenu: View {
             Menu("All Games") { ForEach(library.games) { item($0) } }
         }
         Divider()
-        Button("Console Mode") { NSApp.activate(ignoringOtherApps: true); Router.shared.focus = nil; Router.shared.showConsole() }
+        Button("Console Mode") { Router.shared.showConsole() }
         Button("Open Library") { openLibrary() }
         Divider()
         Button("Quit Cartridge") { NSApp.terminate(nil) }.keyboardShortcut("q")
