@@ -62,9 +62,19 @@ Cartridge is a Mac app that keeps all your games in one place. It turns your own
 ### 🧩 Mods and cheats
 - **Browse Mods** from GameBanana inside Cartridge, install with one click, turn them on and off, and choose which wins where two change the same file. Code patches (IPS, pchtxt) are built into the game.
 - **Find Cheats** for your exact game version from the community cheat database, tick the ones you want, and switch them on and off.
-- Kept clean: no piracy tools, no paid-content unlocks, nothing that gives an advantage online.
+- Kept clean: no adult or crude mods, no piracy tools, no paid-content unlocks, nothing that gives an advantage online.
+
+<img src="readme/mod-browser.jpg" width="100%" alt="Browse Mods: a game's mods from GameBanana as cards under its own art">
 
 <table>
+<tr>
+<td width="50%"><img src="readme/mod-detail.jpg" alt="A mod's files, each with Install"></td>
+<td width="50%"><img src="readme/cartridge-settings.jpg" alt="Cartridge's Settings window"></td>
+</tr>
+<tr>
+<td><b>One click to install</b>: every file of a mod, straight from its authors' page.</td>
+<td><b>Cartridge's Settings</b>: library sources, music and sounds, look, controllers, HDR, battery, building and updates.</td>
+</tr>
 <tr>
 <td width="50%"><img src="readme/mods.jpg" alt="A game's mods, each with a switch"></td>
 <td width="50%"><img src="readme/settings.jpg" alt="A game's settings"></td>
