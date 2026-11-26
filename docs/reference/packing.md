@@ -328,6 +328,13 @@
 - **Fix:** count uncompressed bytes as they are read and compare them with the listed size before completing either streamed method. A mismatch stops the pack and removes the partial archive, preserving the previous IPA and its reuse index. Regression tests cover growth and shrinkage with both deflate and store.
 - **Found on:** synthetic IPA inputs while reviewing [PR #279](https://github.com/seedds/nxnative/pull/279); no game files required.
 
+### An empty icon file gives the app a blank icon and the log names it as the icon
+
+- **Symptom:** the build logs `app icon: <file>` and succeeds, but the app's home-screen icon is blank.
+- **Cause:** `build_ipa.sh` scales the icon (`DM_ICON`, `--icon` / `--fallback-icon` in the NSP script, or the extracted `icon.jpg`) to the asset catalog's `icon.png` with `sips`. `sips` skips an empty file with `Warning: … not a valid file - skipping`, exits 0 and writes nothing, so the catalog named a PNG that does not exist and `DM_APPICON` was set. `actool` then compiles that catalog with exit 0 and no message, and its partial Info.plist has no icon keys. A text file named `.jpg` or `.png` and an unreadable file already stopped the build (`sips` exits 13), naming the file.
+- **Fix:** `build_ipa.sh` also checks that the PNG was written and is not empty, and in every case stops with `the icon <file> is not an image sips can read (empty, unreadable or not an image): give a JPEG or PNG`. `dm/ios/tests/test_app_icon.py` runs the icon step alone: an image becomes a 1024x1024 icon, no file leaves the icon blank, an empty file or a text file named `.jpg` / `.png` stops naming the file.
+- **Found on:** reading the icon step; reproduced with a zero-byte `DM_ICON` (and `actool` run on the resulting catalog), no game files required. Applies to every game's iPhone build.
+
 ## RomFS images
 
 ### RomFS folder transfers fail or leave stale game files
@@ -807,6 +814,14 @@
 - **Cause:** `split_shaders` gave a damaged copy no key (`key = None if ALLOW_DAMAGED`): a good copy that replaces a damaged one keeps every file's path and size, all that the RomFS input (`('tree', …)`) sees, so that key would have kept the damaged split. The shader step takes the package's key as its input, so it never reused its libraries either; the Vulkan and OpenGL shader steps were told not to reuse (`reuse=not ALLOW_DAMAGED`).
 - **Fix:** a damaged copy is keyed as the same extraction: its RomFS by its files' times (`('stat', …)`, which an extraction writes again; inside `RomFS.img`, the image's) and by `check_formats`' list of damaged files (`RomFS.img.formats`). A build of the same extraction reuses the split and the shaders; a new extraction (a repaired copy, other options: `extraction_key`) or another damage list splits again. The Vulkan and OpenGL steps key a damaged copy by times as well (their `provisional` keying). An undamaged build's key is as before, and damaged and undamaged builds never take each other's split.
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#found-on-this-game), v131072 built with `--allow-damaged`, which a contributor kept on after replacing a NUP with three damaged textures ([A damaged file in a NUP or a dump has no hash to fail](#a-damaged-file-in-a-nup-or-a-dump-has-no-hash-to-fail)): the option alone, with no file damaged, took this path. `dm/tools/tests/test_nsp_incremental.py` (`SplitShaders.test_damaged_reuses_only_the_same_extraction`).
+
+### Build anyway stops on an unreadable archive despite matching shader tables
+
+- **Symptom:** a registered game's extraction succeeds with `--allow-damaged`, but shader splitting stops with `file(s) could not be read; the profile's tables hold every file's shaders`, even when every generated shader table matches its registered table.
+- **Cause:** the shader step rejected unreadable archive data before comparing the tables, independently of the explicit extraction override. A corrupt non-shader resource can produce that warning without losing any required shader.
+- **Fix:** allow the explicit override past the unreadable-file guard, retaining the warning and all registered shader-table comparisons. Missing or changed shaders still stop the build, and a normal build still rejects unreadable files. This does not repair corrupted game assets.
+- **Found on:** [Xenoblade Chronicles 3](../../dm/games/010074F013262000/README.md), 2.2.1: `bf3.ard` failed its NCA integrity check and one zlib stream failed decompression, while all 27,055 shader keys and all generated profile tables matched.
+- **Check:** `test_nsp_incremental.py` covers matching tables, reuse, a mismatched table under the override and refusal without the override.
 
 ### An update's offline HTML pages reported as a damaged NSP
 
