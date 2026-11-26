@@ -166,7 +166,7 @@ int front_screen_settling(void) {
 // A variable-refresh screen (ProMotion) in fullscreen switches to a fixed-rate mode of the same size at a multiple of the game's rate (120 → 60 Hz for 60 and 30 fps), though its own
 // rate is a multiple: there the display link at 60 Hz missed its targets (every present a 120 Hz refresh late and every other tick skipped, 40 fps on an M5 Pro at frame latency 2;
 // 1 → 2 → 3 vsync steps at latency 1, issue #347), and the fixed 60 Hz mode held 60.0 fps at latency 1 (docs/reference/frame-rate.md). A screen with no such mode keeps its rate, and
-// the 120 Hz link paces it (nvn_mtl.m link_vrr_120)
+// the 120 Hz link paces it (nvn_mtl.m link_120)
 static NSWindow *g_win; static _Atomic int g_match_want;   // the game's window; the frame rate to match (0 = not known yet), written by the present thread only
 // A switch reconfigures every screen, and with several screens (a DisplayLink one among them) that moved the fullscreen window off the switched screen and back: each move
 // switched the screen back and then again, 18 times in a minute, until two of three screens lost their signal and the Dock and Finder stopped answering (LNPANDY/NX2Apple#1085).
@@ -260,8 +260,11 @@ static void screen_match_once(void) {   // screen_match_apply's work, never ente
     for (CFIndex i = 0; modes && i < CFArrayGetCount(modes); i++) {
         CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i); double r = mode_hz(m);
         if (CGDisplayModeGetWidth(m) != w || CGDisplayModeGetHeight(m) != h || CGDisplayModeGetPixelWidth(m) != pw || CGDisplayModeGetPixelHeight(m) != ph || !CGDisplayModeIsUsableForDesktopGUI(m)) continue;
-        // on a variable-refresh screen only a fixed-rate mode: not the current one, nor one at its rate (the variable mode at the screen's top rate)
-        if (vrr && (CGDisplayModeGetIODisplayModeID(m) == cur_id || (hz > 0 && fabs(r - hz) < 0.5))) continue;
+        // on a variable-refresh screen only a fixed-rate mode: not the current one, which is the variable mode. The screen's top rate is listed twice, the variable mode and a
+        // fixed one with its own ID (a DELL S2725QC at variable 48-120 Hz: 116 variable and 117 fixed, both 120 Hz; a ROG XG27AQNGV: 75 and 74 at 240 Hz). Leaving out every
+        // mode at that rate (as 0135a4bf removed and c36551c3's merge brought back) left out the fixed one too: the DELL kept variable refresh, where both the 60 and the 120 Hz
+        // link stutter, or went to a fixed 60 Hz; at its fixed 120 Hz on the 120 Hz link Ocarina of Time is smooth (2026-11-26)
+        if (vrr && CGDisplayModeGetIODisplayModeID(m) == cur_id) continue;
         // the highest multiple, except for the 120 Hz link: 120 Hz itself where the screen has it (a ROG XG27AQNGV held 16-21 late frames in 30 s at a fixed 120 Hz and 152 with a
         // stall at a fixed 240 Hz). 30 and 60 fps keep the highest
         int exact = want == 120 && fabs(r - 120) < 0.5, have_exact = want == 120 && fabs(pick_hz - 120) < 0.5;
