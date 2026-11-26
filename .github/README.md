@@ -76,7 +76,12 @@ Cartridge is a Mac app that keeps all your games in one place. It turns your own
 - **Controls**: remap any controller, rebind the keyboard, use the mouse as the camera stick. Joy-Con 2 pairs split into two players.
 - **Saves**: back up and restore with one click, and cloud saves through any synced folder, shared between Mac and iPhone.
 - **Screenshots** at the game's own resolution, from the controller's Capture button.
-- **Mods and cheats**: browse GameBanana mods and the community cheat database inside Cartridge, one click to add, a switch for each. Kept clean: no adult mods, piracy tools, paid unlocks or online advantages.
+
+### 🧩 Mods and cheats
+- **Browse Mods** from GameBanana inside Cartridge and **Find Cheats** for your exact game version, one click to add, a switch for each.
+- Kept clean: no adult mods, piracy tools, paid unlocks or online advantages.
+
+<img src="readme/mod-browser.jpg" width="100%" alt="Browse Mods: a game's mods from GameBanana as cards under its own art">
 
 ## Requirements
 
