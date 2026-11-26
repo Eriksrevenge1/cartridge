@@ -989,6 +989,11 @@ static int mouse_button(NSEvent *e, int i, int down) {   // 1: the captured mous
 static int mouse_moved(NSEvent *e) { if (!g_mouse_captured) return 0; g_mdx += e.deltaX; g_mdy += e.deltaY; return 1; }
 @interface DmGameView : NSView @end
 @implementation DmGameView
+- (void)toggleStickMotion:(NSMenuItem *)sender {
+    int enabled = !dm_stick_motion_enabled();
+    dm_stick_motion_set(enabled);
+    sender.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
+}
 - (void)mouseDown:(NSEvent *)e {
     if (mouse_button(e, 0, 1)) return;
     if (dm_controls()->mouse != CTL_MOUSE_OFF && g_input_on && !cp_blocks_input(g_cp.phase)) { mouse_capture(self.window); return; }   // this click only captures
@@ -2050,6 +2055,12 @@ void front_run(void (*guest)(void)) {
         NSMenuItem *ts = [wm addItemWithTitle:@"Take Screenshot" action:@selector(takeScreenshot:) keyEquivalent:@"s"];
         ts.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift; ts.target = g_shot_target;
         [wm addItemWithTitle:@"Show Screenshots" action:@selector(showScreenshots:) keyEquivalent:@""].target = g_shot_target;
+        NSMenu *controls = [[NSMenu alloc] initWithTitle:@"Controls"];
+        NSMenuItem *stickMotion = [controls addItemWithTitle:@"Right Stick Motion" action:@selector(toggleStickMotion:) keyEquivalent:@"g"];
+        stickMotion.target = v;
+        stickMotion.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+        stickMotion.state = dm_stick_motion_enabled() ? NSControlStateValueOn : NSControlStateValueOff;
+        [[bar insertItemWithTitle:@"Controls" action:nil keyEquivalent:@"" atIndex:bar.numberOfItems - 1] setSubmenu:controls];
         NSApp.mainMenu = bar;
         if (want_fs) {
             g_fs_asked = CACurrentMediaTime(); g_fs_starting = 1;   // front_screen_settling: the display link waits for fullscreen
