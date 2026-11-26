@@ -8,7 +8,7 @@
 
 **Not an emulator. Build a game in a few clicks, then play it like it came in the box.**
 
-[![Latest release](https://img.shields.io/github/v/release/Eriksrevenge1/nxnative?label=Cartridge&color=e5484d)](https://github.com/Eriksrevenge1/nxnative/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/Eriksrevenge1/cartridge?label=Cartridge&color=e5484d)](https://github.com/Eriksrevenge1/cartridge/releases/latest)
 [![Apple silicon](https://img.shields.io/badge/Mac-Apple%20silicon-35b4e8)](#requirements)
 [![Follows nxnative](https://img.shields.io/badge/follows-nxnative%20every%203%20hours-555)](https://github.com/seedds/nxnative)
 
@@ -93,7 +93,7 @@ Cartridge is a Mac app that keeps all your games in one place. It turns your own
 
 ## Install
 
-1. Download **Cartridge.zip** from the [latest release](https://github.com/Eriksrevenge1/nxnative/releases/latest) and unzip it.
+1. Download **Cartridge.zip** from the [latest release](https://github.com/Eriksrevenge1/cartridge/releases/latest) and unzip it.
 2. Move **Cartridge.app** to Applications, then open it with **right-click › Open** the first time (it is not signed with a paid Apple certificate).
 3. The setup assistant lists what building needs and fixes each item with a button. Choose your games folder and your `prod.keys`.
 4. Press the hammer, drop in your game's files, and **Build**. The finished game joins the shelf.
