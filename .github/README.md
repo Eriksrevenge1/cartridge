@@ -26,64 +26,57 @@ Cartridge is a Mac app that keeps all your games in one place. It turns your own
 
 <table>
 <tr>
-<td colspan="2"><img src="readme/shelf-dk.jpg" alt="The shelf with Donkey Kong Bananza chosen"></td>
+<td width="33%" valign="top"><h3>📚 One shelf</h3>Switch games beside Steam, Battle.net, Epic, GOG, itch.io, Ubisoft, Amazon, Heroic, CrossOver and Whisky, with each game's art, logo and own music.</td>
+<td width="33%" valign="top"><h3>🛠️ Few-click builds</h3>Drop in a game, its update and DLC, press Build. Cartridge carries the engine and a setup assistant; only Xcode is needed.</td>
+<td width="33%" valign="top"><h3>🛋️ Console mode</h3>Full screen, driven by a controller. A tap of Home in a game brings the shelf up over it, like the console.</td>
 </tr>
+<tr>
+<td valign="top"><h3>📈 Performance coach</h3>After you play, the game's page says how it ran and suggests one setting, with an Apply button.</td>
+<td valign="top"><h3>🔄 Always current</h3>Follows nxnative every 3 hours and updates itself. A badge marks the games an update reaches; one click rebuilds them.</td>
+<td valign="top"><h3>📱 iPhone and iPad</h3>Install over the cable with your own Apple ID, see which games on the device are out of date, and share saves with the Mac.</td>
+</tr>
+</table>
+
+<img src="readme/shelf-dk.jpg" width="100%" alt="The shelf with Donkey Kong Bananza chosen">
+
+<table>
 <tr>
 <td width="50%"><img src="readme/game-page.jpg" alt="A game's page"></td>
 <td width="50%"><img src="readme/options.jpg" alt="A game's Options panel"></td>
 </tr>
 <tr>
 <td><b>Every game's page</b>: its story, art, screenshots, play time and the game's own music.</td>
-<td><b>Options</b>: settings, mods, cheats, controls and saves, Rebuild, wallpaper, favourites.</td>
+<td><b>Options</b>: settings, controls and saves, Rebuild, wallpaper, favourites.</td>
+</tr>
+<tr>
+<td><img src="readme/settings.jpg" alt="A game's settings"></td>
+<td><img src="readme/cartridge-settings.jpg" alt="Cartridge's Settings window"></td>
+</tr>
+<tr>
+<td><b>Per-game settings</b>: screen, frame rate, render scale, MetalFX, HDR, each marked when moved off the tested value.</td>
+<td><b>Cartridge's Settings</b>: library sources, music and sounds, look, controllers, HDR, battery, building and updates.</td>
 </tr>
 </table>
 
 ### 🎮 The library
-- **One shelf for everything**: your Switch games next to Steam, Battle.net, Epic Games, GOG, itch.io, Ubisoft Connect, Amazon Games, Heroic, CrossOver and Whisky games, read from the launchers you already have. Filter by store, favourites or *not played yet*.
-- **Console mode**: the shelf full screen. A controller's D-pad picks a game, A plays it, B goes back. A tap of **Home** in a game brings up the shelf over it, like the console's Home button.
-- **Art and music**: background art, logos and screenshots for each game (LaunchBox's community art, the store's pages), and each Switch game's own background music, played from its files.
-- **Play time and recently played**, a menu bar list of your last five games, and a desktop widget.
-- **Rebuild badge**: a cartridge an update reaches shows a small badge; one click in Options brings every such game up to date.
+- **Every launcher in one place**, read from the launchers you already have. Filter by store, favourites or *not played yet*.
+- **Console mode** for the couch: the D-pad picks a game, A plays it, B goes back. **Home** in a game brings up the shelf over it.
+- **Art and music**: background art, logos and screenshots for every game, and each Switch game's own background music, played from its files.
+- **Play time**, recently played, a menu bar list of your last five games, and a desktop widget.
 
-### 🛠️ Building games
-- **A few clicks, no terminal**: drop in a base game (`.nsp`, `.xci`, `.nsz`, `.xcz`, or a Switch 2 `.nup`), its update and DLC. Cartridge builds a Mac app, an iPhone/iPad IPA, or both.
-- **Carries its own engine**: nxnative, its tools and Python ship inside Cartridge. Only Xcode is needed, and the setup assistant walks you through it.
-- **Updates itself**: each new version (and the nxnative it carries) arrives in the app. Games only ask for a rebuild when an update actually changes them.
-- **Install on iPhone or iPad** over the cable with your own Apple ID, and see which of your games are on the device and up to date.
+### 🛠️ Building
+- **No terminal**: `.nsp`, `.xci`, `.nsz`, `.xcz` or a Switch 2 `.nup`, with its update and DLC. Builds a Mac app, an iPhone/iPad IPA, or both.
+- **Carries its own engine**: nxnative, its tools and Python ship inside Cartridge. The setup assistant checks the rest and fixes each item with a button.
+- **One games folder** on the drive you choose, with free-space checks before every build.
+- **Rebuild badge**: only the games an update actually changes ask for a rebuild, and **Use the previous engine** goes back if a new one builds a game worse.
 
 ### ⚙️ Playing
-- **Per-game settings** as the game's own settings window has them: render scale, frame rate, MetalFX upscaling, HDR, screen choice, and more. Settings changed from the tested value are marked, with **Use Tested** beside them.
-- **Performance coach**: after a session, a game's page says how it ran (late frames, GPU time) and suggests one change with an **Apply** button.
-- **60 and 120 fps**, HDR on HDR screens with a highlights slider per screen, and lighter settings on battery.
+- **60 and 120 fps**, MetalFX upscaling, a screen picker with each screen's refresh rate, and lighter settings on battery.
+- **HDR** on HDR screens, with a highlights slider per screen.
 - **Controls**: remap any controller, rebind the keyboard, use the mouse as the camera stick. Joy-Con 2 pairs split into two players.
 - **Saves**: back up and restore with one click, and cloud saves through any synced folder, shared between Mac and iPhone.
 - **Screenshots** at the game's own resolution, from the controller's Capture button.
-
-### 🧩 Mods and cheats
-- **Browse Mods** from GameBanana inside Cartridge, install with one click, turn them on and off, and choose which wins where two change the same file. Code patches (IPS, pchtxt) are built into the game.
-- **Find Cheats** for your exact game version from the community cheat database, tick the ones you want, and switch them on and off.
-- Kept clean: no adult or crude mods, no piracy tools, no paid-content unlocks, nothing that gives an advantage online.
-
-<img src="readme/mod-browser.jpg" width="100%" alt="Browse Mods: a game's mods from GameBanana as cards under its own art">
-
-<table>
-<tr>
-<td width="50%"><img src="readme/mod-detail.jpg" alt="A mod's files, each with Install"></td>
-<td width="50%"><img src="readme/cartridge-settings.jpg" alt="Cartridge's Settings window"></td>
-</tr>
-<tr>
-<td><b>One click to install</b>: every file of a mod, straight from its authors' page.</td>
-<td><b>Cartridge's Settings</b>: library sources, music and sounds, look, controllers, HDR, battery, building and updates.</td>
-</tr>
-<tr>
-<td width="50%"><img src="readme/mods.jpg" alt="A game's mods, each with a switch"></td>
-<td width="50%"><img src="readme/settings.jpg" alt="A game's settings"></td>
-</tr>
-<tr>
-<td><b>Mods</b>: install, switch on and off, and order them.</td>
-<td><b>Settings</b>: screen, frame rate, render scale, MetalFX and more, per game.</td>
-</tr>
-</table>
+- **Mods and cheats**: browse GameBanana mods and the community cheat database inside Cartridge, one click to add, a switch for each. Kept clean: no adult mods, piracy tools, paid unlocks or online advantages.
 
 ## Requirements
 
