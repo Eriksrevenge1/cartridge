@@ -4,7 +4,7 @@
 # branch: the pull request's branch (off upstream's main, or off the branch named in base); base: the row it builds on, - for upstream's main
 id	title	status	branch	base	fork_commits	notes
 monolith-split	chain/split: read the shaders of Monolith's DMPA model packages and NDSR packs	landed d9a70339	pr/monolith-split	-	05faaf12 391a7fb9	regress.py chain on Xenoblade Chronicles 3: PASS (27,055 shaders unchanged)
-xc2-ns2	game/xc2-ns2: add Xenoblade Chronicles 2's Switch 2 Edition profile	forwarded seedds/nxnative#3136	pr/xc2-ns2	-	7fd3f7b6	the mods and cheats section stays in the fork until mods-* land
+xc2-ns2	game/xc2-ns2: add Xenoblade Chronicles 2's Switch 2 Edition profile	landed 67495b45	pr/xc2-ns2	-	7fd3f7b6	the mods and cheats section stays in the fork until mods-* land
 xcde-ns2	game/xcde-ns2: add Xenoblade Chronicles: Definitive Edition's Switch 2 Edition profile	forwarded seedds/nxnative#3137	pr/xcde-ns2	-	b93fdc57	the mods and cheats section stays in the fork until mods-* land
 display-120	gfx/vi: a Switch 2 display at 120 Hz, and the 120 Hz link on every 120 Hz screen	fork-only (declined #3154: the 120 Hz link and mode request cost ProMotion screens their fixed 60 Hz mode and fixed 120 Hz screens a frame of latency; the Switch 2 120 Hz calls wait for a game that uses them)	pr/display-120	-	13ffd5ec 32f4abeb	without frame generation (removed) and auto-HDR
 auto-hdr	gfx/present: auto-HDR on a screen with HDR on (Mac and iOS)	forwarded seedds/nxnative#3155	pr/auto-hdr	-	5afbc4bf 0bc6e0e9	SDR output unchanged
