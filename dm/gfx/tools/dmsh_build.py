@@ -12,7 +12,7 @@
 # Environment IOSOUT=dir: the same MSL also goes through dm/ios/tools/ios_metal.compile to produce an iphoneos metallib + reflection (chain_metal records the iOS compile convention)
 # Final summary: success / failure counts and the distribution of reasons; distribution of driver segment read offsets (those outside the range the replay layer can fill are listed separately);
 # a [RED] line per shader that built but lost something (shader_regressions.report_losses), which does not change the exit status
-import atexit, errno, inspect, multiprocessing, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf
+import atexit, errno, inspect, zlib, multiprocessing, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf
 import dmsh_geometry, dmsh_tess, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_rewrite, dmsh_reflect, dmsh_entry, dmsh_rt, dmsh_rt_build, dmsh_rt_compile, dmsh_metalwa, dmsh_abi as abi   # abi: the driver segment layout and the binding kinds the host shares (dm/gfx/nvn/dmsh_abi.h)
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HOME = os.path.expanduser('~')
@@ -59,6 +59,7 @@ STORE: 'shader_cache.Store | shader_cache.Remote' = shader_cache.for_chain(_cas,
 atexit.register(STORE.close)   # folds its log into the one file
 CAS_LOCKS, CAS_LOCKS_GUARD = {}, threading.Lock()
 PRE_STATS = collections.Counter()
+STEP_STATS = collections.Counter()   # translator and SPIRV-Cross outputs reused from the step cache (step_get), or made
 # The Mac compile is dmsh_chain.MAC_METAL (each flag's reason there)
 MAC_RECORD = ' '.join(dmsh_chain.MAC_METAL) + '; xcrun -sdk macosx metallib'
 # The compiles run the tools xcrun names, found once: each xcrun launch looks them up again, about 4 ms of a compile's two launches (8 ms a shader). -isysroot is what xcrun -sdk passes
@@ -661,6 +662,46 @@ CODE_FP = hashlib.sha256(source_without_rule_bodies() + b''.join(b'\0' + dmsh_ch
                          + b'\0abi\0' + repr(sorted(abi.VALUES.items())).encode()).hexdigest()
 TOOL_FP = tool_fingerprint().encode()
 
+# The step cache: the translator's outputs for a job and SPIRV-Cross's MSL for a SPIR-V module, each kept under a digest of what alone decides it: the job (without its working
+# path) and the shader's code with the translator's own fingerprint, or the module's bytes with SPIRV-Cross's and its options. A shader's own key (shader_key) covers much more,
+# CODE_FP above all, so a change to this file or a helper module rebuilt every shader from its code: Ocarina of Time's update 1.2338 translated all 42,847 shaders again (about
+# 12 minutes) for MSL that came out the same in all but 32. Now such a shader skips both steps and runs only the Python that changed. The translator reads nothing but the job and the
+# code file (Program.cs), and SPIRV-Cross nothing but the module and its options; an older generation's entries are taken into this one (shader_cache.Store older).
+# zlib: MSL is about a sixth of its size so (Ocarina of Time, 153 KB → 27 KB a shader)
+def _file_sha(path):
+    with open(path, 'rb') as f: return hashlib.file_digest(f, 'sha256').hexdigest()
+XLATE_FP = 'xlate\0' + dmsh_chain.xlate_source_sha() + '\0' + _file_sha(XLATE)
+CROSS_FP = ('cross\0' + _file_sha(SPIRV_CROSS) + '\0' + repr(XC)).encode()
+STEP_OUTPUTS = ('.spv', '.res.json')   # a job's outputs (a geometry job's reader too: those are not kept, geometry_finish)
+def xlate_name(job):
+    j = {k: v for k, v in job.items() if k != 'code'}
+    with open(job['code'], 'rb') as f: code = f.read()
+    return 'xlate/' + hashlib.sha256((XLATE_FP + '\0' + json.dumps(j, sort_keys=True)).encode() + b'\0' + code).hexdigest()
+def step_get(name):   # an entry's bytes, None when there is none or it cannot be read (it is made again)
+    if SOURCE_ONLY: return None
+    data = STORE.get(name)
+    if data is None: return None
+    try: return zlib.decompress(data)
+    except zlib.error: return None
+def xlate_restore(job, w):   # whether the step cache gave the job's outputs, now in w
+    name = xlate_name(job); got = [step_get(name + ext) for ext in STEP_OUTPUTS]
+    if any(g is None for g in got): return False
+    for ext, data in zip(STEP_OUTPUTS, got):
+        dst = os.path.join(w, job['key'] + ext)
+        with open(dst + '.tmp', 'wb') as f: f.write(data)
+        os.replace(dst + '.tmp', dst)
+    STEP_STATS['translation reused'] += 1
+    return True
+def xlate_keep(job, w):   # the job's outputs into the step cache, when the translator made them all
+    if SOURCE_ONLY: return
+    paths = [os.path.join(w, job['key'] + ext) for ext in STEP_OUTPUTS]
+    if not all(os.path.exists(p) for p in paths): return
+    name = xlate_name(job)
+    with STORE.batch():
+        for ext, p in zip(STEP_OUTPUTS, paths):
+            with open(p, 'rb') as f: STORE.put(name + ext, zlib.compress(f.read(), 1))
+    STEP_STATS['translated'] += 1
+
 # Both pair tables feed pipelines, so both must feed padding, build order and shader cache keys.
 def load_pairs(game, package):
     pairs = collections.defaultdict(set)
@@ -879,7 +920,16 @@ def cross_msl(spv, msl):
         from dmsh_wrap import wrap_signed_integers
         with open(spv, 'rb') as f: data = wrap_signed_integers(f.read())
         with open(spv, 'wb') as f: f.write(data)
-    return subprocess.run([SPIRV_CROSS, *XC, spv, '--output', msl], capture_output=True, text=True)
+    with open(spv, 'rb') as f: name = 'msl/' + hashlib.sha256(CROSS_FP + b'\0' + f.read()).hexdigest()   # the step cache (XLATE_FP)
+    if (data := step_get(name)) is not None:
+        with open(msl, 'wb') as f: f.write(data)
+        STEP_STATS['MSL reused'] += 1
+        return subprocess.CompletedProcess([SPIRV_CROSS], 0, '', '')
+    r = subprocess.run([SPIRV_CROSS, *XC, spv, '--output', msl], capture_output=True, text=True)
+    if r.returncode == 0 and not SOURCE_ONLY:
+        with open(msl, 'rb') as f: STORE.put(name, zlib.compress(f.read(), 1))
+        STEP_STATS['MSL made'] += 1
+    return r
 
 
 def finish(key, w, j, c1):
@@ -901,9 +951,12 @@ def finish(key, w, j, c1):
     if j['stage'] == 'vs':   # second pass: re-translate with inputs that are only used as integers reported as uint (see int_inputs)
         extra = {l: t for l, t in dmsh_entry.int_inputs(src).items() if l not in j['attr']}
         if extra:
-            j['attr'].update(extra); jp = os.path.join(w, f'job1_{key}.json'); json.dump([j], open(jp, 'w'))
-            rx = subprocess.run([XLATE, jp, w], capture_output=True, text=True)
-            if rx.returncode or not os.path.exists(os.path.join(w, key + '.spv')): return 'translation failed', ('integer-input retranslation: ' + rx.stderr.strip())[:160], None
+            j['attr'].update(extra)
+            if not xlate_restore(j, w):
+                jp = os.path.join(w, f'job1_{key}.json'); json.dump([j], open(jp, 'w'))
+                rx = subprocess.run([XLATE, jp, w], capture_output=True, text=True)
+                if rx.returncode or not os.path.exists(os.path.join(w, key + '.spv')): return 'translation failed', ('integer-input retranslation: ' + rx.stderr.strip())[:160], None
+                xlate_keep(j, w)
             spv_single_lane(os.path.join(w, key + '.spv'))
             r = cross_msl(os.path.join(w, key + '.spv'), msl)
             if r.returncode: return 'MSL failed', r.stderr.strip()[:160], None
@@ -1158,11 +1211,14 @@ def translate(batch):
     wb = tempfile.mkdtemp(prefix='batch_', dir=w)
     miss = [k for k in batch if k not in cache_hits]
     for k in miss: jobs[k], c1s[k] = job_for(k, loc[k][0], rec_of(k)[1], wb)
+    run = [k for k in miss if jobs[k]['stage'] == 'gs' or not xlate_restore(jobs[k], wb)]   # geometry jobs have more outputs (geometry_finish): always translated
     def xl(ch):
         jp = os.path.join(wb, f'job_{abs(hash(ch[0]))}.json'); json.dump([jobs[k] for k in ch], open(jp, 'w'))
         return subprocess.run([XLATE, jp, wb], capture_output=True, text=True)
     with cf.ThreadPoolExecutor(NJ) as ex:
-        for r in ex.map(xl, [c for c in (miss[i::NJ] for i in range(NJ)) if c]): xlate_errors(r)
+        for r in ex.map(xl, [c for c in (run[i::NJ] for i in range(NJ)) if c]): xlate_errors(r)
+    for k in run:
+        if k not in xerr and jobs[k]['stage'] != 'gs': xlate_keep(jobs[k], wb)
     return wb
 def restored(key, wb):
     """A cache hit's outputs back on disk while it is finished. When another build pruned them since the look (cache_lookup), the shader is translated now, in the batch's folder: False"""
@@ -1205,7 +1261,7 @@ def finished(*_):   # one more shader finished, for the progress
 # in the batch's order, so the results, the summary and every file written are those of the threads (DMSH_PROCS=0). The precompiled Metal headers (dmsh_pch.py) are made here before the
 # fork: a worker would make its own (three compiles for each target in each worker) in a folder that nothing removes, as a worker process ends without atexit. A worker that dies
 # (killed, out of memory) stops the build with one line
-COUNTERS = (PRE_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, MTL.stats)
+COUNTERS = (PRE_STATS, STEP_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, MTL.stats)
 def worker_start():
     global PROGRESS, STORE
     assert SERVED is not None and isinstance(MTL, dmsh_mtlcache.Cache)
@@ -1337,6 +1393,7 @@ print(f'shaders {len(res)}: ok {st["ok"]}, ' + ', '.join(f'{k} {v}' for k, v in 
 print(f'shader cache: hit {PRE_STATS["hit"]}, rebuilt {PRE_STATS["miss"]}')
 for reason in ('new key', 'rule changed', 'code fingerprint changed: all rebuilt'):
     if PRE_STATS[reason]: print(f'  {reason} {PRE_STATS[reason]}')
+if PRE_STATS['miss']: print(f'  of those, step cache: translation reused {STEP_STATS["translation reused"]}, made {STEP_STATS["translated"]}; MSL reused {STEP_STATS["MSL reused"]}, made {STEP_STATS["MSL made"]}')
 print(f'readable-tile versions (<key>_bf, dmsh_fetch.py): {BF_STATS["generated"]} generated, {BF_STATS["failed"]} failed to compile')
 print(f'shadow-input libraries (<key>_bv, dmsh_vin.py): {VIN_STATS["generated"]} generated, {VIN_STATS["failed"]} failed to compile, {VIN_STATS["not generated"]} not generated; '
       f'{VIN_STATS["inputs"]} integer inputs shadowed, {VIN_STATS["float only"]} of them with no other-sign shadow (attribute indices ran out)')

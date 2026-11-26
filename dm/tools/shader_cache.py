@@ -3,13 +3,13 @@
 # for each build that ran. Nothing is unpacked now: an entry goes in and comes out by its name, and a file a tool needs is written only then.
 # SQLite, as it is in Python and takes several writers: dmsh_build.py's threads share one connection (its worker processes use that one too, through this process: Served). Regression builds share their own per-game file, with read-only reuse of the player's cache.
 # Generations: a chain's build writes only its own file. Its per-shader entries never hit another chain's (their digests cover the chain), and the Metal compiles it reuses from an older generation
-# (keyed by the MSL, the convention and the compiler alone) are copied into its file when it takes them (for_chain). After a successful build the NSP script removes the other generations whole
+# (keyed by the MSL, the convention and the compiler alone) and its translator and SPIRV-Cross outputs (keyed by their inputs alone) are copied into its file when it takes them (for_chain). After a successful build the NSP script removes the other generations whole
 # (drop_generations): an old chain, a stopped build of one, or a development build of another chain is one file, removed or deleted by hand without a vacuum. cas.db, the one file from before
 # generations, holding every chain's entries, is the oldest generation and goes the same way.
 # Two tables: entry (name, the blob it names, when it was written) and blob (the bytes, once each). A library kept under its MSL's digest and under its shader's digest was one APFS clone of the other; inside
 # one file it would be two copies, so bytes are stored by their hash. A file removed from the cache gives its pages back at the next prune (incremental vacuum), with no copy of the file.
 # It only saves work: a damaged file costs the work it held and is made anew, and a full drive is one [RED] line. An entry is written and read whole, so its file is never seen half written.
-# Names, as in the folder this replaces: metallib/<target>/<digest>[_x].metallib (dmsh_mtlcache.py), shader/<digest>/<mac|ios>/<output>, index/<key>.json, variant/<digest>/<file> (dmsh_build.py).
+# Names, as in the folder this replaces: metallib/<target>/<digest>[_x].metallib (dmsh_mtlcache.py), shader/<digest>/<mac|ios>/<output>, index/<key>.json, variant/<digest>/<file>, and the step cache xlate/<digest>.spv / .res.json and msl/<digest> (dmsh_build.py).
 # Not part of the translation chain: it decides no output (dmsh_chain.py), like dmsh_mtlcache.py.
 import contextlib, fcntl, hashlib, json, multiprocessing, os, re, shutil, sqlite3, tarfile, threading, time
 from pathlib import Path
@@ -40,8 +40,8 @@ def generations(folder):
 
 class _ReadOnly:
     """Live SQLite readers of other compile cache files, asked in order: mode=ro sees a writer's committed WAL, never migrates, repairs or writes them. Mutable index/stage bookkeeping is local to each build.
-    prefixes: the names they serve (an older generation serves only its Metal compiles: a per-shader entry of another chain never hits)"""
-    def __init__(self, paths, say, prefixes=('shader/', 'variant/', 'metallib/')):
+    prefixes: the names they serve (an older generation serves only its Metal compiles and dmsh_build.py's step cache, keyed by their inputs alone: a per-shader entry of another chain never hits)"""
+    def __init__(self, paths, say, prefixes=('shader/', 'variant/', 'metallib/', 'xlate/', 'msl/')):
         self.say, self.lock, self.prefixes, self.dbs = say, threading.RLock(), prefixes, []
         for p in map(os.fspath, paths):
             if not os.path.isfile(p): continue
@@ -123,7 +123,7 @@ class Store(_Files):
         sources = generations(source) if source and os.path.isdir(source) else [source] if source else []
         self.readonly = _ReadOnly([p for p in sources if os.path.realpath(p) != own], say) if source else None
         older = [p for p in map(os.fspath, older) if os.path.realpath(p) != own]
-        self.older = _ReadOnly(older, say, ('metallib/',)) if older else None
+        self.older = _ReadOnly(older, say, ('metallib/', 'xlate/', 'msl/')) if older else None   # Metal compiles and the step cache (dmsh_build.py XLATE_FP): keyed by their inputs alone
         self._open()
 
     def _connect(self): return sqlite3.connect(self.path, timeout=WAIT, check_same_thread=False, isolation_level=None)
@@ -333,7 +333,7 @@ class Store(_Files):
         groups, refs, sizes = {}, {}, {}
         for name, blob, when, size in rows:
             parts = name.split('/')
-            group = '/'.join(parts[:2]) if parts[0] in ('shader', 'variant', 'stage') else re.sub(r'_x\d*(?=\.metallib$)', '', name)
+            group = '/'.join(parts[:2]) if parts[0] in ('shader', 'variant', 'stage') else re.sub(r'\.(spv|res\.json)$', '', name) if parts[0] == 'xlate' else re.sub(r'_x\d*(?=\.metallib$)', '', name)
             ns, newest = groups.setdefault(group, ([], when)); ns.append((name, blob)); groups[group] = ns, max(newest, when)
             refs[blob] = refs.get(blob, 0) + 1; sizes[blob] = size
         # A stopped build's stage is not a reusable result. Prefill bookkeeping must not claim evicted libraries are still present.

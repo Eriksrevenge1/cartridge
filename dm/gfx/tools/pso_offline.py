@@ -31,7 +31,7 @@
 #                    prebuild tool with its index, and the tool's stamp (prewarm_host, below); the host opens them with the archive (pso_bundle_open_prewarm)
 # Each archive is made again only when its compiler inputs change (key.<arch> in the work folder): the complete pipeline configuration without library locations,
 # the referenced libraries' bytes, architecture, platform, minimum OS and metal-tt version. Chain/profile stamps are validated and refreshed independently.
-# More bases than --batch-size are compiled in sequential groups (batches.<arch>/<index>/ in the work folder, each cached by its own inputs) and merged with metal-pack: one metal-tt on
+# More bases than --batch-size are compiled in groups cut by content (batches.<arch>/h<digest>/ in the work folder, each cached by its own inputs; groups_of), several at a time as memory allows (base_jobs), and merged with metal-pack: one metal-tt on
 # Super Mario Odyssey's 32,864 bases runs an 8 GB Mac out of paging space (docs/reference/shaders.md, Bounded groups for the offline pipeline compiler). The output is the same single file.
 # With compute pipelines, they and the bases are separate groups (batches.<arch>/c<index>/ and <index>/) merged the same way, so new pairs leave the compute pipelines compiled, and the
 # reverse. The compute groups are small (COMPUTE_BATCH) and run --jobs at a time: one metal-tt keeps about three cores busy.
@@ -533,16 +533,39 @@ def compile_batch(lib_dir, bases, work, arch, platform, osmin, toolchain, comput
     return dst, False
 
 
+def _cut_after(item, size):
+    """Whether a content-defined group ends after this item: about one item in size/2 does, by a hash of the item alone, so where the groups end depends on
+    the items and not on their positions. A pipeline added, removed or changed then changes only its own group and leaves every other group's cache valid;
+    with groups cut every size items, one pipeline added near the start shifted every group after it, and a few changed shaders spread over the list
+    spoiled nearly every group (Ocarina of Time, 2026-11-24: an update that changed 32 of 42,847 shaders compiled pipelines again for 476 s)"""
+    h = int.from_bytes(hashlib.blake2b(repr(item).encode(), digest_size=8).digest(), 'big')
+    return h % max(1, size // 2) == 0
+
+
 def groups_of(bases, computes, batch_size, compute_size=COMPUTE_BATCH):
-    """The groups compile_batches compiles, [(folder name, bases, compute pipelines)]: the bases in groups of batch_size (00001, ...), then the compute pipelines in groups of compute_size
-    of their own (c00001, ...), so that a change to either leaves the other's groups as they are. 0: one group of each"""
+    """The groups compile_batches compiles, [(folder name, bases, compute pipelines)]: the render bases (h<digest>) and compute pipelines (ch<digest>) each in groups of at most their size, cut by content (_cut_after; a group is at least an eighth of the size unless the list
+    ends) and named by a digest of their members, so that an unchanged group keeps its folder and its cache wherever it now sits in the list. 0: one group of each"""
     groups = []
     for prefix, items, size in (('', bases, batch_size), ('c', computes, compute_size)):
-        size = size or len(items) or 1
-        for index, start in enumerate(range(0, len(items), size), 1):
-            group = items[start:start + size]
-            groups.append((f'{prefix}{index:05d}', group if not prefix else [], group if prefix else []))
+        if not items: continue
+        size = size or len(items)
+        cur = []
+        def close():
+            name = prefix + 'h' + hashlib.blake2b(repr(cur).encode(), digest_size=8).hexdigest()
+            groups.append((name, cur if prefix != 'c' else [], cur if prefix == 'c' else []))
+        for item in items:
+            cur.append(item)
+            if len(cur) >= size or (len(cur) >= max(1, size // 8) and _cut_after(item, size)): close(); cur = []
+        if cur: close()
     return groups
+
+
+def base_jobs(jobs):
+    """metal-tt runs at a time for the groups of bases: each needs up to about 2 GiB at BATCH (BATCH's note), so one per 6 GiB of memory, at most a third of
+    the CPUs (one run keeps about three cores busy), never more than --jobs. An 8 GB Mac runs one at a time, as before; a 32 GB, 12-core Mac four"""
+    try: mem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    except (ValueError, OSError): mem = 0
+    return max(1, min(jobs, (os.cpu_count() or 3) // 3, mem // (6 << 30)))
 
 
 def compile_batches(lib_dir, bases, work, part, arch, platform, osmin, toolchain, batch_size, computes=(), jobs=1, compute_size=COMPUTE_BATCH):
@@ -555,15 +578,22 @@ def compile_batches(lib_dir, bases, work, part, arch, platform, osmin, toolchain
     """
     groups = groups_of(bases, computes, batch_size, compute_size); total = len(groups); names = {name for name, _, _ in groups}
     failed = ([], [])   # what the groups left out (compile_isolating), returned
-    for old in [*(work / f'batches.{arch}').glob('[0-9]*'), *(work / f'batches.{arch}').glob('c[0-9]*')]:   # the groups of a longer list than this one
-        if old.name not in names: shutil.rmtree(old)
+    gdir = work / f'batches.{arch}'
+    for old in (gdir.iterdir() if gdir.is_dir() else ()):   # groups this list no longer has (and the numbered ones of builds before content-defined groups)
+        if old.is_dir() and old.name not in names: shutil.rmtree(old)
     def one(index, name, group, cgroup):
         print(f'pso_offline: {arch}: batch {index}/{total}: {f"{len(group)} bases" if group else f"{len(cgroup)} compute pipelines"}, compiling or checking cache', flush=True)
         piece, reused = compile_batch(lib_dir, group, work / f'batches.{arch}' / name, arch, platform, osmin, toolchain, cgroup)
         print(f'pso_offline: {arch}: batch {index}/{total}: ready ({"reused" if reused else "compiled"})', flush=True)
         fb, fc = read_failed(work / f'batches.{arch}' / name, arch); failed[0].extend(fb); failed[1].extend(fc)
         return piece
-    pieces = [one(i, *g) for i, g in enumerate(groups, 1) if g[1]]
+    bj = base_jobs(jobs)
+    if bj == 1: pieces = [one(i, *g) for i, g in enumerate(groups, 1) if g[1]]   # one at a time: a failed group stops the rest
+    else:
+        with concurrent.futures.ThreadPoolExecutor(bj) as pool:   # the bases' groups, as many at a time as memory allows (base_jobs), in list order in the archive
+            futures = [pool.submit(one, i, *g) for i, g in enumerate(groups, 1) if g[1]]
+            try: pieces = [f.result() for f in futures]
+            except BaseException: pool.shutdown(cancel_futures=True); raise   # a failed group starts no other not yet started: those under way finish, their pieces cached
     with concurrent.futures.ThreadPoolExecutor(max(1, jobs)) as pool:   # a failed group stops the build once the others under way have finished (their pieces stay cached)
         futures = [pool.submit(one, i, *g) for i, g in enumerate(groups, 1) if not g[1]]
         pieces += [f.result() for f in futures]

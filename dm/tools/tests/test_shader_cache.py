@@ -571,6 +571,14 @@ class Generations(unittest.TestCase):   # one file per chain: a build writes its
         s.close()
         self.assertEqual(self.names(self.d / f'cas-{self.A}.db'), {'metallib/mac/old.metallib'})   # what it read is its own now; what it only saw is not
 
+    def test_older_step_outputs_are_copied_on_read(self):   # dmsh_build.py's step cache: keyed by the translator's or SPIRV-Cross's inputs alone, so another chain's are good
+        self.file(f'cas-{self.B}.db', {'xlate/x.spv': b'spv', 'xlate/x.res.json': b'res', 'msl/m': b'msl', 'index/k.json': b'{}'}, time.time() - 100)
+        s = shader_cache.for_chain(self.d, self.A)
+        self.assertEqual((s.get('xlate/x.spv'), s.get('msl/m')), (b'spv', b'msl'))
+        self.assertIsNone(s.get('index/k.json'))   # its own bookkeeping is not
+        s.close()
+        self.assertEqual(self.names(self.d / f'cas-{self.A}.db'), {'xlate/x.spv', 'msl/m'})
+
     def test_older_generations_go_after_a_build(self):
         now = time.time()
         self.file('cas.db', {'metallib/ios/i.metallib': b'ios', 'metallib/mac/x.metallib': b'old mac', f'shader/{D1}/mac/k_b.metal': b'm'}, now - 300)

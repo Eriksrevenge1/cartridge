@@ -47,6 +47,18 @@ def metallib(funcs, layer=False):   # layer: the layer's name in the library, as
     return head + fl + pm + (b'render_target_array_index' if layer else b'') + b'BC\xc0\xde'
 
 
+def positional():
+    """Groups cut every size items and compiled one at a time, as before content-defined groups: the tests whose expectations are about fixed group sizes
+    and the order of compiler runs pin these, and ContentGroups tests the cuts themselves"""
+    return [mock.patch.object(po, '_cut_after', lambda item, size: False), mock.patch.object(po, 'base_jobs', lambda jobs: 1)]
+
+
+def gname(items, size, prefix='', at=0):   # the folder name groups_of gives the group at index `at` of these items, cut every size items
+    with mock.patch.object(po, '_cut_after', lambda item, size: False):
+        args = ([], items) if prefix == 'c' else (items, [])
+        return po.groups_of(*args, size, size)[at][0]
+
+
 class Pairs(unittest.TestCase):
     def test_read_pairs_as_the_host(self):
         text = b'# header\nv1\tf1\n\nv2\tf2\nv1\tf1\nv3\n v4\tf4\nv1\tf1\textra\n'
@@ -303,9 +315,42 @@ class Compute(unittest.TestCase):
 
     def test_groups(self):
         b, c = [('v', f'e{i}', 'f', 'main0') for i in range(3)], [(f'c{i}_b', 'main0') for i in range(3)]
-        self.assertEqual([(n, len(x), len(y)) for n, x, y in po.groups_of(b, c, 2, 2)], [('00001', 2, 0), ('00002', 1, 0), ('c00001', 0, 2), ('c00002', 0, 1)])
-        self.assertEqual([(n, len(x), len(y)) for n, x, y in po.groups_of(b, [], 0, 0)], [('00001', 3, 0)])
-        self.assertEqual([(n, len(x), len(y)) for n, x, y in po.groups_of([], c, 5, 0)], [('c00001', 0, 3)])
+        with mock.patch.object(po, '_cut_after', lambda item, size: False):
+            g = po.groups_of(b, c, 2, 2)
+            self.assertEqual([(len(x), len(y)) for n, x, y in g], [(2, 0), (1, 0), (0, 2), (0, 1)])
+            self.assertTrue(all(n.startswith('h') for n, x, y in g[:2]) and all(n.startswith('ch') for n, x, y in g[2:]))
+            self.assertEqual([(len(x), len(y)) for n, x, y in po.groups_of(b, [], 0, 0)], [(3, 0)])
+            self.assertEqual([(len(x), len(y)) for n, x, y in po.groups_of([], c, 5, 0)], [(0, 3)])
+
+
+class ContentGroups(unittest.TestCase):
+    """groups_of cuts by content (_cut_after), so a change spoils only its own group's cache; base_jobs bounds the base groups compiled at once"""
+    items = [('v_bp', f'vertex{i}', 'f_b', 'main0') for i in range(2000)]
+
+    def names(self, items, size=64): return [n for n, _, _ in po.groups_of(items, [], size, 16)]
+
+    def test_sizes(self):
+        g = po.groups_of(self.items, [], 64, 16)
+        self.assertEqual([b for _, x, _ in g for b in x], self.items)   # every base once, in order
+        self.assertTrue(all(len(x) <= 64 for _, x, _ in g))
+        self.assertTrue(all(len(x) >= 8 for _, x, _ in g[:-1]))
+        self.assertGreater(len(g), 2000 // 64)
+
+    def test_a_base_added_at_the_start_changes_one_group(self):
+        before, after = self.names(self.items), self.names([('v_bp', 'new', 'f_b', 'main0')] + self.items)
+        self.assertLessEqual(len(set(after) - set(before)), 2)   # the group it joins (and at most the one a cut moved into)
+        self.assertGreater(len(set(after) & set(before)), len(before) - 3)
+
+    def test_a_changed_base_changes_only_its_group(self):
+        changed = list(self.items); changed[1000] = ('v_bp', 'changed', 'f_b', 'main0')
+        before, after = self.names(self.items), self.names(changed)
+        self.assertLessEqual(len(set(after) - set(before)), 2)
+
+    def test_base_jobs(self):
+        GiB = 1 << 30
+        for cpus, mem, jobs, want in ((12, 32 * GiB, 6, 4), (8, 8 * GiB, 4, 1), (24, 128 * GiB, 4, 4), (12, 32 * GiB, 1, 1), (2, 64 * GiB, 6, 1)):
+            with mock.patch.object(po.os, 'cpu_count', return_value=cpus), mock.patch.object(po.os, 'sysconf', side_effect=lambda k: 4096 if k == 'SC_PAGE_SIZE' else mem // 4096):
+                self.assertEqual(po.base_jobs(jobs), want, (cpus, mem, jobs))
 
 
 class BuildCase(unittest.TestCase):
@@ -323,6 +368,7 @@ class BuildCase(unittest.TestCase):
         (self.prof / 'shader_pairs.tsv').write_text('# pairs\nv\tf\nv\tc\n')
         self.out, self.work, self.calls = self.t / 'out', self.t / 'work', []
         self.compiler = 'AIR-TT 1.0'
+        for m in positional(): m.start(); self.addCleanup(m.stop)
 
     def fake_run(self, cmd, **kw):
         cmd = [str(c) for c in cmd]
@@ -646,7 +692,7 @@ class Build(BuildCase):
         with mock.patch.object(self, 'fake_run', runner), mock.patch.object(po, 'plan', return_value=(bases, [], {})):
             # An isolated pilot is the exact cache entry the complete build will consume.
             with mock.patch.object(po.subprocess, 'run', runner), contextlib.redirect_stdout(io.StringIO()):
-                po.compile_batch(self.lib, bases[:2], self.work/'batches.applegpu_g18p/00001', 'applegpu_g18p', 'ios', '27.0', self.compiler)
+                po.compile_batch(self.lib, bases[:2], self.work/'batches.applegpu_g18p'/gname(bases, 2), 'applegpu_g18p', 'ios', '27.0', self.compiler)
             self.main('--batch-size', '2', '--os-min', '27.0')
             self.assertEqual(observed, [('compile',['vertex0','vertex1']),('compile',['vertex2','vertex3']),('compile',['vertex4']),('merge',3)])
             before = list(observed)
@@ -665,7 +711,7 @@ class Build(BuildCase):
         self.assertFalse((self.work/'key.applegpu_g18p').exists())
         self.assertFalse(list(self.out.glob('*.mtl4a')))
         self.assertFalse(list(self.work.rglob('*.partial')))
-        first = self.work/'batches.applegpu_g18p/00001/applegpu_g18p.mtl4a'
+        first = self.work/'batches.applegpu_g18p'/gname(bases, 2)/'applegpu_g18p.mtl4a'
         self.assertTrue(first.is_file()); identity = first.stat().st_mtime_ns
         runner, observed = self.batched_runner()
         with mock.patch.object(self, 'fake_run', runner), mock.patch.object(po, 'plan', return_value=(bases, [], {})):
@@ -706,7 +752,7 @@ class Build(BuildCase):
         self.assertEqual(observed[-1], ('merge', 3))
         self.assertIn(('compile', ['vertex2']), observed)   # the second group's archive, without the base that fails
         self.assertEqual((self.out / 'rest_pairs.tsv').read_text(), 'v\tf\n')
-        self.assertEqual(po.read_failed(self.work / 'batches.applegpu_g18p/00002', 'applegpu_g18p'), ([('v_bp', 'vertex3', 'f_b', 'main0')], []))
+        self.assertEqual(po.read_failed(self.work / 'batches.applegpu_g18p' / gname(bases, 2, at=1), 'applegpu_g18p'), ([('v_bp', 'vertex3', 'f_b', 'main0')], []))
 
     def test_more_failing_bases_than_the_limit_stop_the_build(self):
         bases = [('v_bp', f'vertex{i}', 'f_b', 'main0') for i in range(40)]
@@ -751,10 +797,10 @@ class Build(BuildCase):
         with mock.patch.object(po, 'plan', return_value=(bases, [], {})), mock.patch.object(self, 'fake_run', runner):
             self.main('--batch-size', '1', '--os-min', '27.0')
         groups = self.work / 'batches.applegpu_g18p'
-        self.assertEqual(sorted(d.name for d in groups.iterdir()), ['00001', '00002', '00003', '00004'])
+        self.assertEqual(sorted(d.name for d in groups.iterdir()), sorted(gname(bases, 1, at=i) for i in range(4)))
         with mock.patch.object(po, 'plan', return_value=(bases[:2], [], {})), mock.patch.object(self, 'fake_run', runner):
             self.main('--batch-size', '1', '--os-min', '27.0')
-        self.assertEqual(sorted(d.name for d in groups.iterdir()), ['00001', '00002'])
+        self.assertEqual(sorted(d.name for d in groups.iterdir()), sorted(gname(bases, 1, at=i) for i in range(2)))
 
     def test_compute_pipelines_are_groups_of_their_own(self):
         (self.prof / 'shader_map.tsv').write_text('package\tindex\tstage\tdm_ctl_sha16\tsource\ncs\t0\tcompute\tk\tx\ncs\t1\tcompute\tkc\tx\n')
@@ -769,7 +815,8 @@ class Build(BuildCase):
             self.assertEqual(observed, [('compile', ['main0_z']), ('compile', []), ('merge', 2)])   # the bases, the compute pipelines, one archive
             self.assertEqual(computes(), ['lib:k_b'])   # kc has function constants: left to the host
             self.assertIn('compute\t1\n', (self.out / 'archive.tsv').read_text())
-            self.assertEqual(sorted(d.name for d in (self.work / 'batches.applegpu_g18p').iterdir()), ['00001', 'c00001'])
+            names = sorted(d.name for d in (self.work / 'batches.applegpu_g18p').iterdir()); self.assertEqual(len(names), 2)
+            self.assertTrue(names[0].startswith('ch') and names[1].startswith('h'))   # one group of bases, one of compute pipelines
             observed.clear(); self.main('--os-min', '27.0'); self.assertEqual(observed, [])   # unchanged: the archive reused
             (self.prof / 'shader_pairs.tsv').write_text('v\tc\nv\tf\n')   # other pair lists, the same bases and compute pipelines: the archive reused
             observed.clear(); self.main('--os-min', '27.0'); self.assertEqual(observed, [])
@@ -796,6 +843,15 @@ class Build(BuildCase):
             observed.clear(); bases[0] = ('v_bp','changed','f_b','main0')
             self.main('--batch-size','2','--os-min','27.0')
         self.assertEqual(observed, [('compile',['changed','vertex1']),('merge',3)])
+
+    def test_base_groups_compile_at_once_and_merge_in_order(self):
+        bases = [('v_bp', f'vertex{i}', 'f_b', 'main0') for i in range(6)]
+        runner, observed = self.batched_runner()
+        with mock.patch.object(self, 'fake_run', runner), mock.patch.object(po, 'plan', return_value=(bases, [], {})), mock.patch.object(po, 'base_jobs', lambda jobs: 3):
+            self.main('--batch-size', '2', '--os-min', '27.0', '--no-compute')
+        self.assertEqual(sorted(n for k, n in observed if k == 'compile'), [['vertex0', 'vertex1'], ['vertex2', 'vertex3'], ['vertex4', 'vertex5']])
+        self.assertEqual(observed[-1], ('merge', 3))
+        self.assertEqual((self.out / 'applegpu_g18p.mtl4a').read_bytes().count(b'archive'), 3)
 
     def test_low_disk_space_stops_before_metal_tt(self):   # Cruis'n Blast: a full volume made metal-tt fail with only "applegpu-nt command failed"
         self.work.mkdir(parents=True); (self.work / 'translate-0001').write_bytes(b'x'); (self.work / 'a.airp').write_bytes(b'x')
