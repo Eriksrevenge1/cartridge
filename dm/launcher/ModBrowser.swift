@@ -22,7 +22,7 @@ enum GameBanana {
 
 /// What Browse Mods does not offer (the owner's legal review, after Nintendo v. Yuzu): mods that replace the game's code (whole code modules), unlock paid content, are
 /// console system or piracy tools (signature patches, Atmosphère or firmware files, keys), or give an advantage in online play; and, unless the player turns it on, mods
-/// rated for mature content. Decided from the name, category and description where they say so plainly (conservative: only clear cases), and again from the unpacked files
+/// rated for mature content, and mods that are adult or crude by what they say about themselves (always: there is no switch to show them). Decided from the name, category and description where they say so plainly (conservative: only clear cases), and again from the unpacked files
 /// at install (GameBanana's API does not list an archive's contents). Code patches (IPS, pchtxt) stay allowed
 enum ModRules {
     static func has(_ t: String, _ pattern: String) -> Bool { t.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
@@ -33,6 +33,11 @@ enum ModRules {
         if has(t, #"(unlock(s|er|ed|ing)?\b[^\n]{0,30}\b(dlc|paid|premium|season\s*pass|expansion\s*pass)|\b(dlc|paid\s*content|season\s*pass)\b[^\n]{0,20}\bunlock|free\s*dlc|all\s*dlc\s*unlock|dlc\s*unlocker)"#) { return "unlocks paid content" }
         if has(t, #"\b(online|pvp|ranked|multiplayer|competitive)\b"#) && has(t, #"\b(cheat|hack|aimbot|wallhack|esp\b|god\s*mode|exploit|speed\s*hack)"#) { return "gives an advantage in online play" }
         return nil
+    }
+    /// Adult or crude by its own words: nudity, sex, fetish and slurs in the name, categories, tags or description. GameBanana's content ratings miss many of these
+    /// (an Ocarina of Time mod named for a body part had none), so they are hidden on the words as well; whole words only, so "class", "cockpit" or "Sussex" pass
+    static func adult(_ t: String) -> Bool {
+        has(t, #"\b(nsfw|18\+|r-?18|adults?\s*only|nud(e|es|ity|ist)|naked|topless|bottomless|lewd|hentai|ecchi|porn\w*|xxx|sex|sexy|sexual\w*|erotic\w*|fetish\w*|kink\w*|horny|thicc|milf|futa\w*|lingerie|panties|pantsu|bikinis?|swimsuits?|swimwear|beachwear|bra|thong|underwear|boobs?|breasts?|tits?|titties|nipples?|butt|booty|ass|asses|jiggle|bouncy|penis|dick|cock|genitals?|vagina|uncircumcised|circumcised|balls|testicles?|onlyfans|stripper|strip\s*club|slutty|slut|whore|uncensored|censorship\s*removal|fart\w*|poop|piss|vomit)\b"#)
     }
     /// Why an unpacked mod is refused, from its files; nil when it can be installed
     static func refused(files root: URL) -> String? {
@@ -58,23 +63,30 @@ struct GBGame: Identifiable, Hashable { let id: Int; let name: String }
 struct GBMod: Identifiable, Hashable {
     let id: Int, name: String, author: String, likes: Int, views: Int, updated: Date?, thumb: URL?, page: URL?
     let category: String, mature: Bool   // GameBanana's root category; rated for mature content by GameBanana (content ratings, or hidden by default there)
+    let words: String   // its sub-category and tags, for ModRules.adult
     init?(_ o: [String: Any]) {
         guard let id = o["_idRow"] as? Int, let name = o["_sName"] as? String else { return nil }
         self.id = id; self.name = name
         category = (o["_aRootCategory"] as? [String: Any])?["_sName"] as? String ?? ""
         mature = (o["_bHasContentRatings"] as? Bool ?? false) || (o["_sInitialVisibility"] as? String) == "hide"
+        let sub = (o["_aSubCategory"] as? [String: Any])?["_sName"] as? String ?? ""
+        let tags = ((o["_aTags"] as? [Any]) ?? []).map { t in (t as? String) ?? ((t as? [String: Any]).map { "\($0["_sTitle"] ?? "") \($0["_sValue"] ?? "")" } ?? "") }
+        words = ([sub] + tags).joined(separator: " ")
         author = (o["_aSubmitter"] as? [String: Any])?["_sName"] as? String ?? "?"
         likes = o["_nLikeCount"] as? Int ?? 0; views = o["_nViewCount"] as? Int ?? 0
         updated = ((o["_tsDateUpdated"] ?? o["_tsDateModified"] ?? o["_tsDateAdded"]) as? Double).map { Date(timeIntervalSince1970: $0) }
         let img = ((o["_aPreviewMedia"] as? [String: Any])?["_aImages"] as? [[String: Any]])?.first
-        thumb = img.flatMap { i in (i["_sBaseUrl"] as? String).flatMap { b in (i["_sFile220"] as? String ?? i["_sFile"] as? String).flatMap { URL(string: b + "/" + $0) } } }
+        thumb = img.flatMap { i in (i["_sBaseUrl"] as? String).flatMap { b in (i["_sFile530"] as? String ?? i["_sFile220"] as? String ?? i["_sFile"] as? String).flatMap { URL(string: b + "/" + $0) } } }
         page = (o["_sProfileUrl"] as? String).flatMap(URL.init(string:))
     }
 }
 struct GBFile: Identifiable, Hashable { let id: Int, name: String, size: Int64, version: String, about: String, download: URL? }
 struct GBDetail {
     let mod: GBMod, description: String, authors: [String], files: [GBFile]
-    var refused: String? { ModRules.refused(name: mod.name, category: mod.category, description: description) }
+    var refused: String? {
+        if mod.mature || ModRules.adult("\(mod.name)\n\(mod.category)\n\(mod.words)\n\(description)") { return "adult or crude content" }
+        return ModRules.refused(name: mod.name, category: mod.category, description: description)
+    }
 }
 
 @MainActor final class ModBrowserModel: ObservableObject {
@@ -92,10 +104,9 @@ struct GBDetail {
     @Published var busy = false
     @Published var detail: GBDetail?
     @Published var installing: Int?
-    @Published var showMature = UserDefaults.standard.bool(forKey: "mods.showMature") { didSet { UserDefaults.standard.set(showMature, forKey: "mods.showMature") } }
     private var page = 1
-    /// The mods shown: none that Browse Mods does not offer, and the mature-rated ones only when the player turns them on
-    var shown: [GBMod] { list.filter { ModRules.refused(name: $0.name, category: $0.category) == nil && (showMature || !$0.mature) } }
+    /// The mods shown: none that Browse Mods does not offer, none GameBanana rates as mature, none adult or crude by their own words
+    var shown: [GBMod] { list.filter { ModRules.refused(name: $0.name, category: $0.category) == nil && !$0.mature && !ModRules.adult("\($0.name)\n\($0.category)\n\($0.words)") } }
     init(mods: ModsModel) { self.mods = mods }
     var isEdition: Bool { mods.switch1TitleID != nil }
     private var key: String { "mods.gamebanana.\(game.titleID)" }
@@ -196,8 +207,9 @@ struct GBDetail {
     static func open(for mods: ModsModel) {
         let key = mods.game.titleID
         if let w = open[key] { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 640), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 760), styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView], backing: .buffered, defer: false)
         w.title = "Mods for \(mods.game.name)"; w.isReleasedWhenClosed = false
+        w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden; w.minSize = NSSize(width: 820, height: 560)   // the game's art runs under the title bar
         w.contentView = NSHostingView(rootView: ModBrowserView(model: ModBrowserModel(mods: mods)))
         w.center()
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in open[key] = nil; mods.reload() }
@@ -208,64 +220,140 @@ struct GBDetail {
 
 struct ModBrowserView: View {
     @StateObject var model: ModBrowserModel
+    @ObservedObject private var details = DetailsStore.shared
+    /// The game's own art for the banner (the shelf's wallpaper of it), when Cartridge has one
+    private var art: NSImage? { Titles.shared.all.first { $0.game?.id == model.game.id }.flatMap { details.wall($0) } }
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
-            if model.gb == nil { pickGame } else { list }
-            Divider()
-            HStack {
-                Text("Mods come straight from GameBanana, made by their authors. Not offered: mods that replace the game's code, unlock paid content, are console system tools, or cheat online.").font(.footnote).foregroundStyle(.secondary)
-                Spacer()
-                if let s = model.status { Text(s).font(.footnote) }
-            }.padding(8)
+            banner
+            if model.gb == nil { pickGame } else { grid }
+            footer
         }
+        .background(Brand.ink)
+        .environment(\.colorScheme, .dark)
         .task { await model.start() }
         .sheet(item: Binding(get: { model.detail.map { DetailBox(d: $0) } }, set: { if $0 == nil { model.detail = nil } })) { box in ModDetailView(model: model, d: box.d) }
     }
-    var header: some View {
-        HStack {
-            if let g = model.gb {
-                Text(g.name).font(.headline)
-                if model.isEdition { Text("(Switch version mods)").foregroundStyle(.secondary) }
-                Button("Change Game") { model.gb = nil }.buttonStyle(.link)
-                Spacer()
-                TextField("Search", text: $model.search).textFieldStyle(.roundedBorder).frame(width: 200).onSubmit { Task { await model.reload() } }
-                Toggle("Mature", isOn: $model.showMature).help("Show mods GameBanana rates for mature content")
-                Picker("", selection: $model.sort) { ForEach(ModBrowserModel.Sort.allCases, id: \.self) { Text($0.label).tag($0) } }
-                    .labelsHidden().frame(width: 170).onChange(of: model.sort) { Task { await model.reload() } }
-            } else { Text("Which game on GameBanana?").font(.headline); Spacer() }
-            if model.busy { ProgressView().controlSize(.small) }
-        }.padding(10)
+    /// The game's art across the top, darkened to the window's ink, with its name and the search, sort and progress over it
+    var banner: some View {
+        ZStack(alignment: .bottomLeading) {
+            Group {
+                Color.clear.frame(height: 170).frame(maxWidth: .infinity).overlay {
+                    if let art { Image(nsImage: art).resizable().scaledToFill() }
+                    else { LinearGradient(colors: [Brand.cyan.opacity(0.5), Brand.red.opacity(0.45)], startPoint: .topLeading, endPoint: .bottomTrailing) }
+                }
+            }
+            .clipped()
+            .overlay(LinearGradient(colors: [Brand.ink.opacity(0.15), Brand.ink.opacity(0.65), Brand.ink], startPoint: .top, endPoint: .bottom))
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(model.gb == nil ? "Which game on GameBanana?" : "Mods").font(.custom("Avenir Next", size: 30).weight(.heavy))
+                    if let g = model.gb {
+                        Text(g.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary).lineLimit(1)
+                        if model.isEdition { Text("Switch version mods").font(.system(size: 11, weight: .heavy)).padding(.horizontal, 8).padding(.vertical, 3).background(Capsule().fill(Brand.red.opacity(0.85))) }
+                        Button("Change Game") { model.gb = nil }.buttonStyle(.link).font(.callout)
+                    }
+                    Spacer()
+                    if model.busy { ProgressView().controlSize(.small) }
+                }
+                if model.gb != nil {
+                    HStack(spacing: 10) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search mods", text: $model.search).textFieldStyle(.plain).onSubmit { Task { await model.reload() } }
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 7).frame(width: 260)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        Picker("", selection: $model.sort) { ForEach(ModBrowserModel.Sort.allCases, id: \.self) { Text($0.label).tag($0) } }
+                            .pickerStyle(.segmented).labelsHidden().frame(width: 420).onChange(of: model.sort) { Task { await model.reload() } }
+                        Spacer()
+                        if model.total > 0 { Text("\(model.total) on GameBanana").font(.callout).foregroundStyle(.secondary) }
+                    }
+                }
+            }
+            .padding(.horizontal, 22).padding(.bottom, 14)
+        }
     }
     var pickGame: some View {
-        List(model.games) { g in Button(g.name) { model.choose(g); Task { await model.reload() } }.buttonStyle(.link) }
-    }
-    var list: some View {
-        List {
-            if model.isEdition {
-                Text("These mods were made for the Switch version of the game. When you turn one on, Cartridge carries its changes over to this edition where it can.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            ForEach(model.shown) { m in
-                Button { Task { await model.open(m) } } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        AsyncImage(url: m.thumb) { $0.resizable().scaledToFill() } placeholder: { Color.secondary.opacity(0.15) }
-                            .frame(width: 110, height: 62).clipShape(RoundedRectangle(cornerRadius: 6))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(m.name).font(.body.weight(.medium))
-                            Text("by \(m.author)").font(.callout).foregroundStyle(.secondary)
-                            HStack(spacing: 10) {
-                                Label("\(m.likes)", systemImage: "heart"); Label("\(m.views)", systemImage: "eye")
-                                if let u = m.updated { Text(u, style: .date) }
-                            }.font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }.contentShape(Rectangle())
-                }.buttonStyle(.plain)
-            }
-            if model.hasMore { Button("Show More") { Task { await model.more() } } }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(model.games) { g in
+                    Button { model.choose(g); Task { await model.reload() } } label: {
+                        HStack { Text(g.name).font(.system(size: 14, weight: .semibold)); Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary) }
+                            .padding(12).background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
+                    }.buttonStyle(.plain)
+                }
+            }.padding(22)
         }
+    }
+    var grid: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if model.isEdition {
+                    Label("These mods were made for the Switch version. When you turn one on, Cartridge carries its changes over to this edition where it can.", systemImage: "arrow.triangle.branch")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230, maximum: 320), spacing: 16)], spacing: 18) {
+                    ForEach(model.shown) { m in ModCard(m: m) { Task { await model.open(m) } } }
+                }
+                if model.hasMore {
+                    HStack { Spacer(); Button("Show More") { Task { await model.more() } }.controlSize(.large); Spacer() }.padding(.top, 6)
+                }
+            }
+            .padding(22)
+        }
+    }
+    var footer: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.shield.fill").foregroundStyle(Brand.cyan)
+            Text("Mods come straight from GameBanana, made by their authors. Not offered: adult or crude mods, mods that replace the game's code, unlock paid content, are console system tools, or cheat online.")
+                .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+            Spacer()
+            if let s = model.status { Text(s).font(.footnote) }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10).background(.ultraThinMaterial)
+    }
+}
+
+/// One mod on the grid: its picture large, its name, author and counts; lit in Cartridge's colours under the pointer
+struct ModCard: View {
+    let m: GBMod
+    let open: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 0) {
+                // a fixed frame the picture fills and is cut to: a picture sized by its own width pushed the cards out of their columns
+                Color.white.opacity(0.05).frame(height: 150).frame(maxWidth: .infinity)
+                    .overlay {
+                        AsyncImage(url: m.thumb) { $0.resizable().scaledToFill() } placeholder: {
+                            Image(systemName: "puzzlepiece.extension.fill").font(.largeTitle).foregroundStyle(.white.opacity(0.25))
+                        }
+                    }
+                    .clipped()
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(m.name).font(.system(size: 14, weight: .bold)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("by \(m.author)").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(spacing: 12) {
+                        Label("\(m.likes)", systemImage: "heart.fill").foregroundStyle(Brand.red.opacity(0.9))
+                        Label(m.views.formatted(.number.notation(.compactName)), systemImage: "eye.fill")
+                        Spacer()
+                        if let u = m.updated { Text(u, format: .dateTime.month(.abbreviated).year()) }
+                    }.font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                }
+                .padding(12)
+            }
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(hover ? 0.09 : 0.055)))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(
+                hover ? AnyShapeStyle(LinearGradient(colors: [Brand.cyan, Brand.red], startPoint: .topLeading, endPoint: .bottomTrailing)) : AnyShapeStyle(Color.white.opacity(0.08)), lineWidth: hover ? 2 : 1))
+            .shadow(color: Brand.cyan.opacity(hover ? 0.3 : 0), radius: 16, y: 6)
+            .scaleEffect(hover ? 1.02 : 1)
+            .animation(.easeOut(duration: 0.15), value: hover)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
     }
 }
 private struct DetailBox: Identifiable { let d: GBDetail; var id: Int { d.mod.id } }
@@ -275,34 +363,50 @@ struct ModDetailView: View {
     let d: GBDetail
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomLeading) {
+                Color.clear.frame(height: 200).frame(maxWidth: .infinity)
+                    .overlay { AsyncImage(url: d.mod.thumb) { $0.resizable().scaledToFill() } placeholder: { LinearGradient(colors: [Brand.cyan.opacity(0.4), Brand.red.opacity(0.4)], startPoint: .topLeading, endPoint: .bottomTrailing) } }
+                    .clipped()
+                    .overlay(LinearGradient(colors: [.clear, Brand.ink.opacity(0.7), Brand.ink], startPoint: .top, endPoint: .bottom))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(d.mod.name).font(.title3.weight(.semibold))
+                    Text(d.mod.name).font(.custom("Avenir Next", size: 24).weight(.heavy))
                     Text("by \(d.authors.joined(separator: ", "))").foregroundStyle(.secondary)
-                    if let p = d.mod.page { Link("Open on GameBanana", destination: p).font(.callout) }
-                }
-                Spacer()
-                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+                }.padding(.horizontal, 20).padding(.bottom, 12)
             }
-            if !d.description.isEmpty { Text(d.description).font(.callout) }
-            Text("Files").font(.headline)
-            List(d.files) { f in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(f.name)
-                        Text([f.version.isEmpty ? nil : "Version \(f.version)", ByteCountFormatter.string(fromByteCount: f.size, countStyle: .file), f.about.isEmpty ? nil : f.about]
-                                .compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 12) {
+                if !d.description.isEmpty { Text(d.description).font(.callout) }
+                if let p = d.mod.page { Link("Open on GameBanana", destination: p).font(.callout) }
+                Text("FILES").font(.system(size: 11, weight: .heavy)).tracking(2).foregroundStyle(.secondary).padding(.top, 4)
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(d.files) { f in
+                            HStack {
+                                Image(systemName: "shippingbox.fill").foregroundStyle(Brand.cyan)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(f.name).font(.system(size: 13, weight: .semibold))
+                                    Text([f.version.isEmpty ? nil : "Version \(f.version)", ByteCountFormatter.string(fromByteCount: f.size, countStyle: .file), f.about.isEmpty ? nil : f.about]
+                                            .compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if let why = d.refused { Text("Not offered: \(why)").font(.caption).foregroundStyle(.secondary) }
+                                else if model.installing == f.id { ProgressView().controlSize(.small) }
+                                else { Button("Install") { Task { await model.install(f, of: d) } }.buttonStyle(.borderedProminent).tint(Brand.cyan.opacity(0.8)).disabled(model.installing != nil) }
+                            }
+                            .padding(10).background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
+                        }
                     }
+                }.frame(minHeight: 120)
+                if let s = model.status { Text(s).font(.footnote) }
+                HStack {
+                    Text("Installed mods start off. A mod that replaces the game's code can't be used and isn't installed.").font(.footnote).foregroundStyle(.secondary)
                     Spacer()
-                    if let why = d.refused { Text("Not offered: \(why)").font(.caption).foregroundStyle(.secondary) }
-                    else if model.installing == f.id { ProgressView().controlSize(.small) }
-                    else { Button("Install") { Task { await model.install(f, of: d) } }.disabled(model.installing != nil) }
+                    Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
-            }.frame(minHeight: 140)
-            if let s = model.status { Text(s).font(.footnote) }
-            Text("Installed mods start off. A mod that replaces the game's code can't be used and isn't installed.").font(.footnote).foregroundStyle(.secondary)
+            }
+            .padding(20)
         }
-        .padding().frame(minWidth: 620, minHeight: 420)
+        .background(Brand.ink).environment(\.colorScheme, .dark)
+        .frame(minWidth: 640, minHeight: 520)
     }
 }

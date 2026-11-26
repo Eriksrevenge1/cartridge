@@ -18,6 +18,20 @@ struct SettingsShell: View {
             case .display: "sun.max.fill"; case .battery: "battery.75percent"; case .building: "hammer.fill"; case .updates: "arrow.triangle.2.circlepath"; case .about: "info.circle.fill"
             }
         }
+        /// One line under the page's title: what the group is for
+        var blurb: String {
+            switch self {
+            case .library: "Where your games are, and the launchers Cartridge reads them from"
+            case .sound: "Each game's own music, and the shelf's sounds"
+            case .look: "How Cartridge looks and moves"
+            case .controllers: "The controllers connected to this Mac"
+            case .display: "HDR highlights for each screen"
+            case .battery: "Lighter settings while your Mac runs on its battery"
+            case .building: "Your keys, Xcode and how games are built"
+            case .updates: "New versions of Cartridge and the engine it carries"
+            case .about: "This version, and the setup check"
+            }
+        }
         /// The words its rows use, for search
         var words: String {
             switch self {
@@ -54,32 +68,44 @@ struct SettingsShell: View {
                             Spacer()
                         }
                         .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(on ? Color.primary.opacity(0.1) : .clear))
+                        .background(RoundedRectangle(cornerRadius: 9).fill(on ? Color.primary.opacity(0.12) : .clear))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(on ? AnyShapeStyle(LinearGradient(colors: [Brand.cyan.opacity(0.6), Brand.red.opacity(0.6)], startPoint: .leading, endPoint: .trailing)) : AnyShapeStyle(Color.clear), lineWidth: 1))
                         .contentShape(Rectangle())
                     }.buttonStyle(.plain)
                 }
                 Spacer()
             }
             .padding(14).frame(width: 250).background(.ultraThinMaterial)
-            Divider()
-            ScrollView { page.padding(26).frame(maxWidth: .infinity, alignment: .leading) }
+            Divider().opacity(0.4)
+            ScrollView { page.padding(.horizontal, 30).padding(.vertical, 26).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading) }
         }
+        // the shelf's own light (cyan and red over the icon's near-black, a pale paper in light mode), still: the cards sit on it as glass
+        .background(HomeBackdrop(hero: nil, moving: false).ignoresSafeArea())
         .onChange(of: search) { if let first = groups.first, !groups.contains(where: { $0.rawValue == group }) { group = first.rawValue } }
     }
 
     @ViewBuilder private var page: some View {
         let g = Group(rawValue: group) ?? .library
-        VStack(alignment: .leading, spacing: 18) {
-            Text(g.rawValue).font(.custom("Avenir Next", size: 30).weight(.heavy))
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(spacing: 16) {   // the page's header: its icon large, its name and what it is for
+                Image(systemName: g.symbol).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white).frame(width: 58, height: 58)
+                    .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(LinearGradient(colors: [Brand.cyan, Brand.red], startPoint: .topLeading, endPoint: .bottomTrailing)))
+                    .shadow(color: Brand.cyan.opacity(0.35), radius: 14, x: -4, y: 4).shadow(color: Brand.red.opacity(0.3), radius: 14, x: 4, y: 6)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(g.rawValue).font(.custom("Avenir Next", size: 30).weight(.heavy))
+                    Text(g.blurb).font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.bottom, 4)
             switch g {
             case .library: LibrarySettings()
             case .sound: SoundSettings()
             case .look: LookSettings()
             case .controllers: ControllerSettings()
-            case .display: HDRSettingsView().formStyle(.grouped)
-            case .battery: BatterySettingsView().formStyle(.grouped)
-            case .building: BuildSettingsView().environmentObject(builder).formStyle(.grouped)
-            case .updates: UpdatesSettingsView().formStyle(.grouped)
+            case .display: HDRSettingsView().formStyle(.grouped).scrollContentBackground(.hidden)
+            case .battery: BatterySettingsView().formStyle(.grouped).scrollContentBackground(.hidden)
+            case .building: BuildSettingsView().environmentObject(builder).formStyle(.grouped).scrollContentBackground(.hidden)
+            case .updates: UpdatesSettingsView().formStyle(.grouped).scrollContentBackground(.hidden)
             case .about: AboutSettings()
             }
         }
@@ -94,8 +120,9 @@ struct SettingsBox<C: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title.uppercased()).font(.system(size: 11, weight: .heavy)).tracking(2).foregroundStyle(.secondary).padding(.leading, 4)
             VStack(alignment: .leading, spacing: 0) { content }
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.05)))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(LinearGradient(colors: [Color.primary.opacity(0.14), Color.primary.opacity(0.04)], startPoint: .top, endPoint: .bottom)))
+                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
         }
     }
 }
@@ -104,9 +131,14 @@ struct SettingsBox<C: View>: View {
 struct SettingsRow<C: View>: View {
     let title: String
     var note: String = ""
+    var icon: String? = nil   // an SF Symbol in a small tile before the title
     @ViewBuilder var control: C
     var body: some View {
         HStack(spacing: 16) {
+            if let icon {
+                Image(systemName: icon).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).frame(width: 28, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.18)))
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 14, weight: .semibold))
                 if !note.isEmpty { Text(note).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
@@ -129,7 +161,7 @@ struct LibrarySettings: View {
             SettingsBox(title: "Sources") {
                 ForEach(Store.allCases, id: \.self) { s in
                     let n = titles.external.filter { $0.store == s || $0.runtime == s }.count
-                    SettingsRow(title: s.rawValue, note: note(s, n)) {
+                    SettingsRow(title: s.rawValue, note: note(s, n), icon: symbol(s)) {
                         Toggle("", isOn: Binding(get: { !off.contains(s.rawValue) }, set: { on in
                             if on { off.remove(s.rawValue) } else { off.insert(s.rawValue) }
                             Titles.set(s, on: on)
@@ -150,6 +182,14 @@ struct LibrarySettings: View {
                     }
                 }
             }
+        }
+    }
+    /// The shelf rail's symbol for the store (ShellView.filters), so a source looks the same in both places
+    private func symbol(_ s: Store) -> String {
+        switch s {
+        case .steam: "cloud.fill"; case .battlenet: "bolt.fill"; case .epic: "e.square.fill"; case .gog: "g.square.fill"; case .heroic: "h.square.fill"
+        case .itch: "i.square.fill"; case .ubisoft: "u.square.fill"; case .amazon: "a.square.fill"; case .ea: "e.circle.fill"; case .appStore: "bag.fill"
+        case .mac: "macwindow"; case .crossover: "wineglass.fill"; case .whisky: "wineglass"
         }
     }
     private func note(_ s: Store, _ n: Int) -> String {
@@ -261,9 +301,19 @@ struct ControllerSettings: View {
 struct AboutSettings: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+        HStack(spacing: 18) {
+            LogoMark(left: Brand.cyan, right: Brand.red, size: 84)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("cartridge").font(.custom("Avenir Next", size: 34).weight(.heavy))
+                Text(verbatim: "Version 1.\(Updates.shared.build)").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary).monospacedDigit()
+                Text("Your games, on your Mac, on a shelf.").font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+        }
         SettingsBox(title: "Cartridge") {
-            SettingsRow(title: "Version", note: Engine.shared.version.map { "Engine \($0)" } ?? "") { Text("1.\(Updates.shared.build)").monospacedDigit() }
+            SettingsRow(title: "Version", note: Engine.shared.version.map { "Engine \($0)" } ?? "") { Text(verbatim: "1.\(Updates.shared.build)").monospacedDigit() }
             SettingsRow(title: "Setup check", note: "Xcode, Python, the Metal compiler and your keys") { Button("Open Setup Assistant") { openWindow(id: "setup") } }
+        }
         }
     }
 }
