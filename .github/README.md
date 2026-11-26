@@ -32,7 +32,7 @@ Cartridge is a Mac app that keeps all your games in one place. It turns your own
 </tr>
 <tr>
 <td valign="top"><h3>📈 Performance coach</h3>After you play, the game's page says how it ran and suggests one setting, with an Apply button.</td>
-<td valign="top"><h3>🔄 Always current</h3>Follows nxnative every 3 hours and updates itself. A badge marks the games an update reaches; one click rebuilds them.</td>
+<td valign="top"><h3>✨ HDR for every game</h3>Auto-HDR lifts any game's highlights on an HDR screen, and Switch 2 games with HDR of their own draw it as their makers graded it.</td>
 <td valign="top"><h3>📱 iPhone and iPad</h3>Install over the cable with your own Apple ID, see which games on the device are out of date, and share saves with the Mac.</td>
 </tr>
 </table>
@@ -68,11 +68,12 @@ Cartridge is a Mac app that keeps all your games in one place. It turns your own
 - **No terminal**: `.nsp`, `.xci`, `.nsz`, `.xcz` or a Switch 2 `.nup`, with its update and DLC. Builds a Mac app, an iPhone/iPad IPA, or both.
 - **Carries its own engine**: nxnative, its tools and Python ship inside Cartridge. The setup assistant checks the rest and fixes each item with a button.
 - **One games folder** on the drive you choose, with free-space checks before every build.
+- **Always current**: follows nxnative every 3 hours and updates itself.
 - **Rebuild badge**: only the games an update actually changes ask for a rebuild, and **Use the previous engine** goes back if a new one builds a game worse.
 
 ### ⚙️ Playing
 - **60 and 120 fps**, MetalFX upscaling, a screen picker with each screen's refresh rate, and lighter settings on battery.
-- **HDR** on HDR screens, with a highlights slider per screen.
+- **HDR**: Auto-HDR for every game on an HDR screen, each Switch 2 game's own HDR where it has one (or Auto-HDR, your choice), and a highlights slider per screen.
 - **Controls**: remap any controller, rebind the keyboard, use the mouse as the camera stick. Joy-Con 2 pairs split into two players.
 - **Saves**: back up and restore with one click, and cloud saves through any synced folder, shared between Mac and iPhone.
 - **Screenshots** at the game's own resolution, from the controller's Capture button.
