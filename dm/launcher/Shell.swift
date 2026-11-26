@@ -343,7 +343,8 @@ struct Wallpaper: View {
     }
 }
 
-/// A layer showing the art, filling the view, drifting slowly (a pan back and forth over 80 s); a new picture cross-fades in. The drift is stepped by a display
+/// A layer showing the art, filling the view, drifting slowly (a pan back and forth over 50 s, its swing a share of the view's size so a full screen moves as
+/// visibly as a small window, under a slower breathing zoom); a new picture cross-fades in. The drift is stepped by a display
 /// link at 60 frames a second (20 showed its steps), only while its window can be seen, not left to an endless Core Animation animation: macOS composites the window at the screen's full rate for as long as such an
 /// animation runs (120 Hz here: a third of the window server's time for a picture that moves a point a second)
 struct WallLayer: NSViewRepresentable {
@@ -357,6 +358,7 @@ struct WallLayer: NSViewRepresentable {
         var game = ""
         private var link: CADisplayLink?
         private var t0 = CACurrentMediaTime()
+        private var swing = CGSize(width: 24, height: 8)   // the pan's reach each way, set from the view's size
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
@@ -370,7 +372,9 @@ struct WallLayer: NSViewRepresentable {
         override func layout() {
             super.layout()
             CATransaction.begin(); CATransaction.setDisableActions(true)
-            art.frame = bounds.insetBy(dx: -30, dy: -12)   // room for the drift
+            // the pan reaches 3.5% of the width and 2% of the height each way (a fixed 24 points was under 1% of a full screen, too little to see)
+            swing = CGSize(width: max(24, bounds.width * 0.035), height: max(8, bounds.height * 0.02))
+            art.frame = bounds.insetBy(dx: -(swing.width + 4), dy: -(swing.height + 4))   // room for the drift
             CATransaction.commit()
         }
         func drift(_ on: Bool) {
@@ -382,9 +386,11 @@ struct WallLayer: NSViewRepresentable {
             } else if !on, let l = link { l.invalidate(); link = nil }
         }
         @objc private func step(_ l: CADisplayLink) {
-            let p = sin((CACurrentMediaTime() - t0) * .pi / 40)   // -1 … 1, a full swing in 80 s
+            let t = CACurrentMediaTime() - t0
+            let p = sin(t * .pi / 25)                      // -1 … 1, a full swing in 50 s
+            let z = 1.03 + 0.03 * sin(t * .pi / 37)       // 1.0 … 1.06, out of step with the pan so the path does not repeat each swing
             CATransaction.begin(); CATransaction.setDisableActions(true)
-            art.transform = CATransform3DMakeTranslation(CGFloat(24 * p), CGFloat(-8 * p), 0)
+            art.transform = CATransform3DTranslate(CATransform3DMakeScale(CGFloat(z), CGFloat(z), 1), swing.width * CGFloat(p), -swing.height * CGFloat(p), 0)
             CATransaction.commit()
         }
         override func viewDidMoveToWindow() { if window == nil { drift(false) } }
