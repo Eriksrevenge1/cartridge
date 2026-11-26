@@ -168,6 +168,8 @@ iPad gameplay and DLC content beyond those menus remain unvalidated.
   corrected compact gameplay (`boot33compact512`) confirms bump `0xf6070000`,
   a 512 MB + 128 KB first-arena capacity and about 225 MB committed there.
 
+`shader_pairs.tsv` was split again on 2026-11-26 (resolved): the merge of upstream on 2026-11-25 and the hand-inserted `# cover:` line of faf91a9d left the same 23,000 pairs out of the split's order, with 264 single-stage covers above the section line, so every rebuild stopped at "the split shader tables differ". The table is now the split's own output for 2.2.1 with the four DLC.
+
 ## Mac validation and remaining work
 
 `boot33compact512` uses the complete shader set, the corrected compact modules
