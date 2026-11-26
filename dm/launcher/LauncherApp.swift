@@ -632,7 +632,7 @@ struct SetupCommand: View {
     @Environment(\.openSettings) private var openSettings
     var body: some View {
         Button("Setup Assistant…") { openWindow(id: "setup") }
-        Button("Check for Updates…") { Updates.shared.check(); openSettings() }
+        Button("Check for Updates…") { UserDefaults.standard.set(SettingsShell.Group.updates.rawValue, forKey: "settings.group"); Updates.shared.check(); openSettings() }
     }
 }
 /// At the first start, the setup assistant opens by itself when something a build needs is missing (until its Done is pressed once)
