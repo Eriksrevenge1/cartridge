@@ -17,6 +17,7 @@ struct ShellView: View {
     @ObservedObject private var sessions = Sessions.shared
     @ObservedObject private var covers = Covers.shared
     @ObservedObject private var router = Router.shared   // console mode: the window full screen
+    @ObservedObject private var health = HealthStore.shared   // which games a Rebuild is due for
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @Environment(\.dismissWindow) private var dismissWindow
@@ -110,7 +111,9 @@ struct ShellView: View {
                                                            options = nil
                                                            // after the sheet is gone: a rebuild with no source asks for one in an open panel
                                                            DispatchQueue.main.async {
-                                                               if all { rebuildAll(library.games, library: library, builder: builder) { openWindow(id: "build") } }
+                                                               // every game an update reaches, or every one when none is due (a rebuild by choice)
+                                                               let due = library.games.filter { !health.due($0).isEmpty }
+                                                               if all { rebuildAll(due.isEmpty ? library.games : due, library: library, builder: builder) { openWindow(id: "build") } }
                                                                else if let g = t.game { rebuildGame(g, builder: builder) { openWindow(id: "build") } }
                                                            }
                                                        }) }
@@ -119,7 +122,8 @@ struct ShellView: View {
                 CartridgePages(game: g, close: { cartridgePages = nil }).environmentObject(library).environmentObject(builder).frame(minWidth: 900, minHeight: 680)
             }
         }
-        .onAppear { shelf = makeShelf(); attach(); choose(current, sound: false); for t in titles.all { details.ensure(t) } }
+        .onAppear { shelf = makeShelf(); attach(); choose(current, sound: false); for t in titles.all { details.ensure(t) }; health.refresh(library.games) }
+        .onChange(of: library.games.map(\.buildStamp)) { health.refresh(library.games) }   // a rebuild replaced an app, or the library changed
         .onDisappear { detach() }
         .onReceive(Timer.publish(every: 180, on: .main, in: .common).autoconnect()) { _ in if active, sheet < 0.5, let t = current { details.nextWall(t) } }
         // the wallpaper moves while its window can be seen, in front or not (Cartridge on one screen while another app is used): only a covered or minimised
@@ -456,6 +460,7 @@ struct Shelf: View {
     let play: (Title) -> Void
     let add: () -> Void
     @ObservedObject private var all = Titles.shared
+    @ObservedObject private var health = HealthStore.shared
     var body: some View {
         GeometryReader { geo in ScrollViewReader { proxy in
             ScrollView(.horizontal) {
@@ -486,6 +491,13 @@ struct Shelf: View {
                 .overlay(alignment: .topTrailing) {
                     if let t, all.isRunning(t) { Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.white, .green).offset(x: 6, y: -6) }
                     else if t?.game?.isSwitch2 == true { Text("2").font(.system(size: 12, weight: .black)).foregroundStyle(.white).frame(width: 20, height: 20).background(Circle().fill(Brand.red)).offset(x: 6, y: -6) }
+                }
+                .overlay(alignment: .topLeading) {   // a Rebuild is due (an update reaches this game): its reason is in the Options panel
+                    if let g = t?.game, let f = health.due(g).first {
+                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 11, weight: .black)).foregroundStyle(.white)
+                            .frame(width: 22, height: 22).background(Circle().fill(f.level == .stop ? Color.red : Color.orange)).offset(x: -6, y: -6)
+                            .help("Rebuild due: see Options")
+                    }
                 }
         .offset(y: on ? -30 : 0)
         .animation(.spring(duration: 0.35, bounce: 0.25), value: on)
@@ -660,14 +672,19 @@ struct OptionsPanel: View {
     @State private var choosing = false
     @ObservedObject private var titles = Titles.shared
     @ObservedObject private var details = DetailsStore.shared
+    @ObservedObject private var health = HealthStore.shared
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title.name).font(.custom("Avenir Next", size: 26).weight(.heavy))
             Text(title.platform).foregroundStyle(.secondary).padding(.bottom, 8)
             if title.hasCartridgePages { row("slider.horizontal.3", "Settings, mods, cheats, controls and saves", pages) }
             if let g = title.game, !Library.shared.running.contains(g.id) {
-                row("hammer", "Rebuild") { rebuild(false) }
-                row("hammer.circle", "Rebuild All Switch Games") { rebuild(true) }
+                let due = health.due(g), dueCount = Library.shared.games.filter { !health.due($0).isEmpty }.count
+                row("hammer", due.isEmpty ? "Rebuild" : "Rebuild (an update is ready)", lit: !due.isEmpty) { rebuild(false) }
+                ForEach(due) { f in   // why, in the panel only
+                    Label(f.text, systemImage: f.level == .stop ? "xmark.octagon.fill" : f.level == .warn ? "exclamationmark.triangle.fill" : "info.circle").font(.callout).foregroundStyle(.secondary).padding(.horizontal, 14)
+                }
+                row("hammer.circle", dueCount == 0 ? "Rebuild All Switch Games" : "Rebuild the \(dueCount) Game\(dueCount == 1 ? "" : "s") an Update Reaches") { rebuild(true) }
             }
             row(titles.favorites.contains(title.id) ? "heart.slash" : "heart", titles.favorites.contains(title.id) ? "Remove from Favorites" : "Add to Favorites") { titles.toggleFavorite(title); close() }
             if let f = title.app ?? title.folder { row("folder", "Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([f]); close() } }
@@ -679,10 +696,10 @@ struct OptionsPanel: View {
         .padding(26).frame(width: 460)
         .sheet(isPresented: $choosing) { WallpaperPicker(title: title, close: { choosing = false; close() }) }
     }
-    private func row(_ sym: String, _ text: String, _ action: @escaping () -> Void) -> some View {
+    private func row(_ sym: String, _ text: String, lit: Bool = false, _ action: @escaping () -> Void) -> some View {
         Button(action: { UISound.select.play(); action() }) {
             Label(text, systemImage: sym).font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10).padding(.horizontal, 14)
-                .background(RoundedRectangle(cornerRadius: 12).fill(.primary.opacity(0.06)))
+                .background(RoundedRectangle(cornerRadius: 12).fill(lit ? AnyShapeStyle(Color.orange.opacity(0.3)) : AnyShapeStyle(.primary.opacity(0.06))))
         }.buttonStyle(.plain)
     }
 }

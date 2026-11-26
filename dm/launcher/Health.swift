@@ -9,7 +9,28 @@ struct HealthFinding: Identifiable, Hashable {
     enum Level { case info, warn, stop }
     let level: Level
     let text: String
+    /// what to do is a Rebuild (the space warning is not)
+    var rebuild = true
     var id: String { text }
+}
+
+/// Each library game's findings, for the shelf: a badge on the cartridges a Rebuild is due for, the reason in their Options panel. Checked again when the library
+/// or a build changes (a rebuild ends, an app is replaced)
+@MainActor final class HealthStore: ObservableObject {
+    static let shared = HealthStore()
+    @Published private(set) var findings: [String: [HealthFinding]] = [:]   // by Game.id
+    private var stamp = ""
+    func refresh(_ games: [Game]) {
+        let s = games.map { "\($0.id)|\($0.buildStamp)" }.joined(separator: ",")
+        guard s != stamp else { return }
+        stamp = s
+        Task {
+            let out = await Task.detached(priority: .utility) { Dictionary(uniqueKeysWithValues: games.map { ($0.id, Health.check($0)) }) }.value
+            if stamp == s { findings = out }
+        }
+    }
+    /// the Rebuild findings of this game (empty when it is up to date)
+    func due(_ g: Game?) -> [HealthFinding] { g.flatMap { findings[$0.id] }?.filter(\.rebuild) ?? [] }
 }
 
 enum Health {
@@ -24,7 +45,7 @@ enum Health {
             out.append(HealthFinding(level: .stop, text: "The app is missing \(what) (\(path)): Rebuild it."))
         }
         if let free = Builder.freeSpace(at: Game.supportRoot), free < minFree {
-            out.append(HealthFinding(level: .warn, text: String(format: "Only %.1f GB free on your home drive, where the game keeps its save and caches: free some space before playing.", Double(free) / 1e9)))
+            out.append(HealthFinding(level: .warn, text: String(format: "Only %.1f GB free on your home drive, where the game keeps its save and caches: free some space before playing.", Double(free) / 1e9), rebuild: false))
         }
         let info = NSDictionary(contentsOf: g.contents.appendingPathComponent("Info.plist"))
         // built with the engine Cartridge carries: an app from another engine version asks for a rebuild (an update brought a newer one)
