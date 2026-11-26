@@ -1,5 +1,5 @@
 # kind: evidence  Xenoblade Chronicles 2 – Nintendo Switch 2 Edition shaders (Monolith HCPS / SLCT in RomFS + main) → control section + code area keys (dm/gfx/tools/shader_split.py)
-# column 5 records where each key first appears, a copy in the game before one in an add-on; no PC shader pairing supplied
+# column 5 names the chosen source of each key, a copy in the game before one in an add-on; no PC shader pairing supplied
 package	index	stage	dm_ctl_sha16	source
 vs_main.bin	0	vertex	1d3f1bb8a17435b5	main#SLCT@0xc34b20#HCPS@0x0#var0.0
 ps_main.bin	0	pixel	e60164c08dda5034	main#SLCT@0xc34b20#HCPS@0x0#var0.0
