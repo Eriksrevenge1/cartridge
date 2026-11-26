@@ -58,7 +58,11 @@ jobs:
           git push -q origin "$up:refs/heads/main" 2>&1 || echo "::warning::the fork's main could not be updated to upstream's (it holds commits of its own?)"
           if git merge-base --is-ancestor "$up" HEAD; then
             # nothing to merge; the branch's newest commit still gets its release (a merge resolved by hand, Cartridge's own work)
-            if gh release view "cartridge-$(git rev-list --count HEAD)" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # commits since the newest release that change only .github (the fork's front page and its pictures, workflows, templates) ship nothing in Cartridge: no release for them
+            last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)
+            if [ -n "$last" ] && git fetch -q origin "refs/tags/$last:refs/tags/$last" 2>/dev/null && git diff --quiet "$last" HEAD -- . ':(exclude).github'; then
+              echo "Upstream has nothing new, and $BRANCH changed only .github since $last." | tee -a "$GITHUB_STEP_SUMMARY"; echo "new=0" >> "$GITHUB_OUTPUT"
+            elif gh release view "cartridge-$(git rev-list --count HEAD)" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
               echo "Upstream has nothing new, and $BRANCH is released." | tee -a "$GITHUB_STEP_SUMMARY"; echo "new=0" >> "$GITHUB_OUTPUT"
             else
               echo "Upstream has nothing new; $BRANCH's newest commit has no release yet." | tee -a "$GITHUB_STEP_SUMMARY"; echo "new=1" >> "$GITHUB_OUTPUT"
