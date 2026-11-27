@@ -77,7 +77,8 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual(build(BOTW, 'nvn', 'ios').keys(), ios.keys())   # ios when unset
         self.assertEqual(set(ios) - set(mac), {'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS', 'DM_ROTATION'})
         self.assertIn('DM_RUMBLE', mac); self.assertIn('DM_METAL_HUD', mac)
-        self.assertEqual(set(mac) - set(ios), {'DM_FULLSCREEN', 'DM_FOCUS_KEEP', 'DM_SW2', 'DM_NVN_ANISO'})   # Mac-only Display mode, playing on behind another app (front_mac.m), Switch 2 controllers, and NVN texture filtering
+        self.assertEqual(set(mac) - set(ios), {'DM_FULLSCREEN', 'DM_FOCUS_KEEP', 'DM_NVN_ANISO'})   # Mac-only Display mode, playing on behind another app (front_mac.m), and NVN texture filtering
+        self.assertIn('DM_SW2', ios); self.assertIn('DM_SW2', mac)   # Switch 2 controllers: on both since the iPhone's Bluetooth transport (DmGamepad.m)
         self.assertNotIn('DM_NVN_ANISO', build('0100535012974000', 'vulkan', 'mac'))
         self.assertNotIn('DM_NVN_ANISO', build('010014E00DB56000', 'gl', 'mac'))
         s = mac['DM_FULLSCREEN']
