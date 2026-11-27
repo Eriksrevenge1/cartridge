@@ -604,7 +604,10 @@ static inline int fam_is_valid(id<MTLTexture> t) {
     uint64_t wh = 0; NvImageHeap *o = fam_owner(t, &wh);
     return !o || !o->compressed || atomic_load_explicit(&o->valid_wh, memory_order_acquire) == wh;
 }
-static os_unfair_lock g_rmu;
+// Leaf lock for g_treg_serial mutations (treg_unlink, mtl_reg_tex under g_rmu) and lock-free-of-g_rmu membership checks in fam_set_valid.
+// Lock order: g_rmu → o->pool_lk → g_treg_ser_lk (never taken before g_rmu or o->pool_lk), so rp_end_at reached under g_rmu
+// (tex_upgrade during pool_entry / encode_args_full) never re-enters g_rmu (issue #3404).
+static os_unfair_lock g_treg_ser_lk = OS_UNFAIR_LOCK_INIT;
 static int treg_serial_held(uint64_t serial);
 // The serials the family's pool walks saw (pool_entry, img_pool_elem, pool_seen_scan; callers hold g_rmu), for a size switch to note (fam_set_valid). On a new serial, drop
 // entries no pool ID registers any more (a re-registration of their ID unlinked them from g_treg_serial) before growing, so target re-initialization churn does not keep
@@ -630,12 +633,9 @@ static void fam_set_valid(NvImageHeap *o, uint64_t wh) {
     atomic_store_explicit(&o->valid_wh, wh, memory_order_release);
     args_dirty_all();
     os_unfair_lock_lock(&o->pool_lk);
-    uint32_t any = o->npool_sers;
-    os_unfair_lock_unlock(&o->pool_lk);
-    if (!any) return;
+    if (!o->npool_sers) { os_unfair_lock_unlock(&o->pool_lk); return; }
     uint64_t stack_s[32], *sers = stack_s; uint32_t ns = 0, cap = 32;
-    os_unfair_lock_lock(&g_rmu);
-    os_unfair_lock_lock(&o->pool_lk);
+    os_unfair_lock_lock(&g_treg_ser_lk);
     uint32_t keep = 0;
     for (uint32_t i = 0; i < o->npool_sers; i++) {
         uint64_t ser = o->pool_sers[i].serial;
@@ -653,8 +653,8 @@ static void fam_set_valid(NvImageHeap *o, uint64_t wh) {
         sers[ns++] = ser;
     }
     o->npool_sers = keep;
+    os_unfair_lock_unlock(&g_treg_ser_lk);
     os_unfair_lock_unlock(&o->pool_lk);
-    os_unfair_lock_unlock(&g_rmu);
     for (uint32_t i = 0; i < ns; i++) own_note(sers[i]);
     if (sers != stack_s) free(sers);
 }
@@ -2505,6 +2505,7 @@ static void b2b_note(uint64_t dst, uint64_t n) {
 }
 static void buffer_copy_note(uint64_t dst, uint64_t n) { post_buffer_copy(dst, n); b2b_note(dst, n); }
 void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n) {
+    if (!n) return;
     rc_copy(src,dst,n);
     if (src != dst) nvn_buffer_write_ranges(dst, n, buffer_copy_note);
     pend_add(dst, n, 2); g_mdx_epoch++;
@@ -8769,8 +8770,8 @@ typedef struct { tex_t t; int ok; view_t v; int has_v; void *view, *view_fam; ui
                  uint32_t used; } treg_t;   // stand: what its pool table entries hold while its texture is not made (pool_stand; retained), stand_tt1 its texture type + 1, stand_no: it can have none (STAND_NO), or none until a mapping notes its pages (STAND_WAIT); reg_frame: the frame of the registration
 enum { STAND_NO = 1, STAND_WAIT = 2 };   // treg_t.stand_no: no stand-in while the registration stands; none until a mapping over its pages notes it (treg_sparse_notes)
 static treg_t *g_treg; static int g_ntreg;
-static nvn_hmap g_treg_serial = {.klen = 8};   // serial → first registered descriptor index + 1, under g_rmu
-static int treg_serial_held(uint64_t serial) { return nvn_hm_get(&g_treg_serial, &serial) != NULL; }   // a pool ID registers it; caller holds g_rmu
+static nvn_hmap g_treg_serial = {.klen = 8};   // serial → first registered descriptor index + 1; mutated under g_rmu + g_treg_ser_lk (readers holding either lock are excluded from writers)
+static int treg_serial_held(uint64_t serial) { return nvn_hm_get(&g_treg_serial, &serial) != NULL; }   // a pool ID registers it; caller holds g_rmu or g_treg_ser_lk
 // Texture ID views are valid for an epoch (view_ser), not for every serial table change: ser_sync takes the notes (own_note) and sends only the IDs registered with a noted serial
 // down the slow path; a change without a note starts a new epoch, which sends them all (what every g_ser_gen bump did before). A battle map in Fire Emblem: Fortune's Weave changes a
 // few serials a frame (the per-stage program ring in bind_stages among them), and each change made the next pool walk (pool_gpu) resolve all ~5,000 IDs again, 2 ms a frame.
@@ -8869,8 +8870,12 @@ static void treg_unlink(int id_) {
     treg_t *r = &g_treg[id_];
     if (!r->ok || !r->t.serial) return;
     if (r->prev) g_treg[r->prev - 1].next = r->next;
-    else if (r->next) nvn_hm_put(&g_treg_serial, &r->t.serial, (void *)(uintptr_t)r->next);
-    else nvn_hm_del(&g_treg_serial, &r->t.serial);
+    else {
+        os_unfair_lock_lock(&g_treg_ser_lk);
+        if (r->next) nvn_hm_put(&g_treg_serial, &r->t.serial, (void *)(uintptr_t)r->next);
+        else nvn_hm_del(&g_treg_serial, &r->t.serial);
+        os_unfair_lock_unlock(&g_treg_ser_lk);
+    }
     if (r->next) g_treg[r->next - 1].prev = r->prev;
     r->prev = r->next = 0;
 }
@@ -8882,9 +8887,13 @@ static void treg_retire_serial(uint64_t ser) {
     // only their submission keeps a transient view alive. Walk this serial's
     // descriptors, rather than scanning the whole ID space at each Finalize.
     os_unfair_lock_lock(&g_rmu);
-    for (int n = (int)(uintptr_t)nvn_hm_get(&g_treg_serial, &ser); n; n = g_treg[n - 1].next) {
+    int head = (int)(uintptr_t)nvn_hm_get(&g_treg_serial, &ser);
+    for (int n = head; n; n = g_treg[n - 1].next) {
         treg_t *r = &g_treg[n - 1]; r->retired = 1; treg_drop_views(r);
     }
+    // Replay can consume serial_del's note before the descriptors retire. Notify it again
+    // while holding the descriptor lock so tables pick up the change to view lifetime.
+    if (head) own_note(ser);
     os_unfair_lock_unlock(&g_rmu);
 }
 static void treg_res_check(void) {
@@ -9202,7 +9211,9 @@ void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
             rr->retired = !own_tex_live(t->serial);
             rr->next = (int)(uintptr_t)nvn_hm_get(&g_treg_serial, &t->serial);
             if (rr->next) g_treg[rr->next - 1].prev = id_ + 1;
+            os_unfair_lock_lock(&g_treg_ser_lk);
             nvn_hm_put(&g_treg_serial, &t->serial, (void *)(uintptr_t)(id_ + 1));
+            os_unfair_lock_unlock(&g_treg_ser_lk);
         }
     }
     // The scan can remove a gone ID before an identical registration revives it.
@@ -18848,6 +18859,12 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
            p && p->sh[0] ? p->sh[0]->key : "-", p && p->sh[1] ? p->sh[1]->key : "-", p && p->sh[2] ? p->sh[2]->key : "-",
            dw ? dw->prim : di->prim, dw ? dw->count : di->count, dw ? dw->instances : di->instances, di != NULL,
            (unsigned long long)(dw ? dw->ind : di->ind), S.rast_discard, S.tf_on); }
+    // An empty direct draw invokes no shader and changes no resources; indirect counts belong to the GPU.
+    // Skipping before pass setup and buffer resolution also prevents a 0-byte index lookup from hitting big_lookup's len <= 1 unknown-length promotion.
+    if (!g_geo_program && ((dw && !dw->ind && !dw->mdi_cnt && dw->count <= 0) || (di && !di->ind && !di->mdi_cnt && di->count <= 0))) {
+        PD("Z %llu draw skipped (before the pass begins): empty direct draw (count=%d)", g_stat_pass + !g_enc, dw ? dw->count : di->count);
+        return;
+    }
     // An indirect draw's arguments (and an indexed one's first indices) at encode and as the GPU left them (read once the submission completed, after any GPU culling earlier in it
     // wrote them): in pass-dumped frames, and for the first n indirect draws with DM_NVN_INDLOG=n
     static long indlog = -1; if (indlog < 0) { const char *v = getenv("DM_NVN_INDLOG"); indlog = v ? atol(v) : 0; }

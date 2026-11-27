@@ -60,6 +60,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [Animal Crossing: New Horizons](01006F8002326000/README.md) | `01006F8002326000` | 3.0.3 | 20.5.4 | Nintendo EPD (sead / agl / gsys) | NVN | — |
 | [Apollo Justice: Ace Attorney Trilogy](010020D01B890000/README.md) | `010020D01B890000` | 1.0.1 | 15.3.2 | Capcom's RE Engine, Havok, Wwise | NVN | [60 fps target](010020D01B890000/README.md#frame-rate) |
 | [Assassin's Creed III Remastered](01007F600B134000/README.md) | `01007F600B134000` | 1.0.0 (provisional Mac profile) | 5.4.0 | Ubisoft Scimitar / Anvil | NVN | — |
+| [Atelier Ryza 2: Lost Legends & the Secret Fairy](01009A9012022000/README.md) | `01009A9012022000` | 1.0.7 | 9.6.0 | Gust's engine on Koei Tecmo's KTGL | NVN | — |
 | [Atelier Ryza: Ever Darkness & the Secret Hideout DX](0100199023B2E000/README.md) | `0100199023B2E000` | 1.2.0 | 18.3.2 | Gust's engine on Koei Tecmo's KTGL | NVN | — |
 | [Baba Is You](01002CD00A51C000/README.md) | `01002CD00A51C000` | 1.0.12 | 19.3.3 | Multimedia Fusion 2 game on MP2 Games' runtime (Lua) | NVN | — |
 | [BALL x PIT](010086A022444000/README.md) | `010086A022444000` | 1.293 | 20.5.19 | Unity 6000.0.62f1 IL2CPP | NVN | — |
@@ -72,6 +73,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [The Binding of Isaac: Rebirth](01009BC00C38A000/README.md) | `01009BC00C38A000` | 1.0 (base) | 5.5.0 | its own engine | NVN | — |
 | [Big Brain Academy: Brain vs. Brain](0100620012D6E000/README.md) | `0100620012D6E000` | 1.2.0 | 11.4.3 | NintendoWare Bezel Engine 1.56 | NVN | — |
 | [BioShock Remastered](0100AD10102B2000/README.md) | `0100AD10102B2000` | 1.0.2 (provisional Mac profile) | 9.3.1 | Unreal Engine 3 (Blind Squirrel), Scaleform, Bink | NVN | — |
+| [BioShock 2 Remastered](01002620102C6000/README.md) | `01002620102C6000` | 1.0.2 (provisional Mac profile) | 9.3.1 | Unreal Engine 3 (Blind Squirrel), Scaleform, Bink | NVN | — |
 | [Blasphemous](0100698009C6E000/README.md) | `0100698009C6E000` | 1.0.8 | 8.3.1 | Unity 2017.4.28f1 IL2CPP, FMOD | NVN | — |
 | [Blasphemous 2](010040801A4C8000/README.md) | `010040801A4C8000` | 1.0.8 | 15.3.2 | Unity 2021.3.20f1 IL2CPP, FMOD | NVN | — |
 | [Bloodstained: Curse of the Moon](01004B800AF5A000/README.md) | `01004B800AF5A000` | 1.1.1 | 4.5.0 | Inti Creates' engine | NVN | — |
@@ -80,6 +82,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [Borderlands: Game of the Year Edition](010064800F66A000/README.md) | `010064800F66A000` | 1.0.2 | 9.3.0 | Unreal Engine 3 (package version 595), FMOD | NVN | 60 fps target |
 | [Brain Memory Training Academy](0100F5D01DA3A000/README.md) | `0100F5D01DA3A000` | 1.0.0 (base) | 16.2.4 | Unity 2022.3.5f1 IL2CPP | NVN | — |
 | [BRAVELY DEFAULT Ⅱ](01006DC010326000/README.md) | `01006DC010326000` | 1.0.0 (base) | 10.4.0 | Unreal Engine 4.23, CRIWARE | NVN | [60 fps target](01006DC010326000/README.md#frame-rate) |
+| [Bridge Constructor Portal](010016E004796000/README.md) | `010016E004796000` | 1.1 | 8.3.2 | Unity 2019.1.14f1 IL2CPP, FMOD | NVN | — |
 | [Burnout Paradise Remastered](0100DBF01000A000/README.md) | `0100DBF01000A000` | 1.0.0 (base) | 9.3.0 | Criterion's engine | NVN | — |
 | [Captain Toad: Treasure Tracker](01009BF0072D4000/README.md) | `01009BF0072D4000` | 1.4.2 | 8.2.0 | Nintendo EPD Tokyo (`al` over sead / agl) | NVN | — |
 | [CAPTAIN TSUBASA 2: WORLD FIGHTERS](01009720213B0000/README.md) | `01009720213B0000` | 1.0.6 | 18.3.1 | Unreal Engine 5.5.4, Wwise, Bink 2 | NVN | — |
@@ -117,6 +120,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [Factorio](01004200189F4000/README.md) | `01004200189F4000` | 2.0.76 | 21.4.2 | Wube Software's engine, SDL | OpenGL | — |
 | [Farming Simulator 26: Nintendo Switch Edition](0100D440269E8000/README.md) | `0100D440269E8000` | 1.0.1.0 | 20.5.4 | GIANTS Engine | NVN | — |
 | [Fate/hollow ataraxia REMASTERED](010070E022546000/README.md) | `010070E022546000` | 1.0.2 | 16.2.6 | TYPE-MOON's Fuzz engine (`smash::fw`) | OpenGL | — |
+| [Fate/stay night REMASTERED](010023301E41C000/README.md) | `010023301E41C000` | 1.4.1 | 16.2.6 | TYPE-MOON's Fuzz engine (`smash::fw`) | OpenGL | — |
 | [FINAL FANTASY CRYSTAL CHRONICLES Remastered Edition](0100CE4010AAC000/README.md) | `0100CE4010AAC000` | 1.0.3 | 8.2.1 | Unity 2018.4.2f1 IL2CPP, FMOD | NVN | — |
 | [FINAL FANTASY RESONANCE](0100606026F12000/README.md) | `0100606026F12000` | 1.0.1 | 20.5.17 | Unreal Engine 5.6.1 | NVN | 60 fps target |
 | [FINAL FANTASY RESONANCE, Asian release](0100B8A026F14000/README.md) | `0100B8A026F14000` | 1.0.1 | 20.5.17 | Unreal Engine 5.6.1 | NVN | 60 fps target |
@@ -198,6 +202,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [Pokémon Brilliant Diamond](0100000011D90000/README.md) | `0100000011D90000` | 1.3.0 | 11.4.3 | Unity 2019.4.27f1 IL2CPP | NVN | 60 fps target |
 | [Pokémon Legends: Arceus](01001F5010DFA000/README.md) | `01001F5010DFA000` | 1.1.1 | 11.4.0 | Game Freak's engine (between Sword's and Trinity) | NVN | — |
 | [Pokémon Legends: Z-A](0100F43008C44000/README.md) | `0100F43008C44000` | 2.0.2 | 19.3.11 | Game Freak's Trinity engine | NVN | — |
+| [Pokémon: Let's Go, Pikachu!](010003F003A34000/README.md) | `010003F003A34000` | 1.0.2 (provisional Mac profile) | 5.4.151 | Game Freak's engine | NVN | — |
 | [Pokémon Pokopia](0400A3A01EE4C000/README.md) | `0400A3A01EE4C000` | v655360 (Switch 2) | 20.5.25 (Ounce) | Koei Tecmo's KTGL | NVN2 | — |
 | [Pokémon Scarlet](0100A3D008C5C000/README.md) | `0100A3D008C5C000` | 1.0.0 | 13.3.5 | Game Freak's Trinity engine | NVN | — |
 | [Pokémon Shield](01008DB008C2C000/README.md) | `01008DB008C2C000` | 1.3.2 | 7.3.2 | Game Freak's engine (before Trinity) | NVN | — |
