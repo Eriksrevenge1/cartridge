@@ -318,6 +318,15 @@
 - **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md#found-on-this-game), while profiling the shader split.
 - **Check:** `test_split_magics.py` splits an image with a renamed zip, an eight-byte EA signature and concatenated zstd frames with an empty `PATH`. `test_easf.py` covers EA's version keys and DLC routing.
 
+### The shader split takes over a minute on a RomFS of Yaz0 files
+
+- **Symptom:** the NSP script's `shader split` step takes 76 to 79 s for Breath of the Wild on an M5 Pro, every core busy (about 980 s of CPU).
+- **Cause:** 31,304 of the RomFS's 41,062 files are Yaz0 (8.0 GB stored, 15.7 GB decoded), and `yaz0()` decoded them one item at a time in Python, about 34 MB/s a core: 911 of the workers' 1,051 CPU seconds. Four in five items are literals, so the time went to interpreter steps, not to copies.
+- **Fix:** once 0x1000 bytes are out, `yaz0()` goes through whole groups in batches, as many as can neither read past the stream nor pass the size in its header. A 256-entry table gives each group header's literal runs, so a run is one slice and a `0xff` group one 8-byte slice; another gives a back-reference's length and distance from its first byte. The start, the end and a damaged stream still go item by item, so the output and both `[RED]` messages stay the same.
+- **Measurement:** the [original PR](https://github.com/seedds/nxnative/pull/3295) measured against `002724b8` on an 18-core M5 Pro, Python 3.13, `J=18`, three cold scratch splits each: 75.7 to 78.8 s (961 to 987 s CPU) became 41.2 to 44.0 s (521 to 527 s CPU). On one core, 330 of the game's Yaz0 files (304 MB decoded) went from 34.5 to 71.4 MB/s. The package and all six tables were byte-identical in every run.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), while profiling the shader split.
+- **Check:** `test_split_yaz0.py` keeps the old decoder as the reference and compares `yaz0()` with it on 7,259 generated streams (random, every length at short distances, sizes ending inside a group or a copy, every truncation, back-references before the start), as bytes, bytearray and memoryview.
+
 ## Diagnostic reports
 
 ### A large log can retain key material after redaction
@@ -900,6 +909,14 @@
 - **Cause:** the base game's HtmlDocument NCA can be sparse too (16 KB, beside the sparse Program NCA). `--html` reads the update's HtmlDocument NCAs, each over a base one when it is a patch, and then every base HtmlDocument NCA on its own; a sparse one read alone fails the hash check while its tables open.
 - **Fix:** `dm/tools/nx_extract/Program.cs` reads no sparse base HtmlDocument NCA on its own (`a sparse HtmlDocument NCA of the base game (… bytes): read only through the update's patch, not alone`), as Horizon mounts it only through its patch.
 - **Found on:** [Minecraft Dungeons II](../../dm/games/0100A7C01B792000/README.md), base v0 with update v131072: the update's patch (`accessible-urls`) and its full legal information NCA are read, the base's legal information NCA too.
+
+### Offline pages of a sparse base game are incomplete without its update patch
+
+- **Symptom:** `nx_extract --html` on a base NSP with no update (or an update that does not patch its sparse Manual NCA) prints `a sparse HtmlDocument NCA of the base game (16384 bytes): read only through the update's patch, not alone`, writes only the non-sparse Manual NCAs (`1 HtmlDocument NCAs`) and exits 0, although the sparse HtmlDocument pages are missing.
+- **Cause:** the sparse-base skip above skipped every sparse base Manual NCA unconditionally without checking whether an update patch actually read through that base NCA. Without an update, or when the update only ships an unrelated full Manual NCA (such as LegalInformation) or patches a different base NCA, nothing supplied the sparse NCA's pages.
+- **Fix:** `dm/tools/nx_extract/Program.cs` (`ExtractHtml`) records the exact base Manual NCAs that an update patch successfully read through (`patched`). A sparse base Manual NCA is skipped only when it is in `patched`; otherwise `--html` removes any partial `html<n>` folders it created, prints `[RED] a sparse HtmlDocument NCA of the base game (… bytes) has no update patch to read it through: its pages are missing; pack the base game with its update NSP`, and stops with exit code 4 (the code a sparse base Program NCA without its update already returns). Non-sparse bases and updates whose patch matches the sparse base read identically to before.
+- **Check:** `dm/tools/tests/test_pfs0_storage.py` (`CheckSparseHtmlExtraction` in `Pfs0StorageTests.cs`) covers base-only sparse extraction (including end-to-end `--html` CLI on a synthetic NSP), an unrelated full update Manual NCA, a patch matching a different base NCA, a failed patch alongside a full update NCA, a second unpatched sparse base, a matching patch (3 directories, exit 0), and a non-sparse base alone.
+- **Found on:** [Minecraft Dungeons II](../../dm/games/0100A7C01B792000/README.md), base v0 without its update ([PR #1769](https://github.com/seedds/nxnative/pull/1769)): base-only extraction previously wrote 14 files in one directory and exited 0, against 29 files in three directories with update v131072.
 
 ### Unreal 4.27 shaders with 8-byte hashes, an untagged record or a version 12 pak
 

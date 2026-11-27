@@ -259,6 +259,7 @@ DM_NVN_RP_AREA	switch	`0` makes passes on targets of 16 M pixels or more cover t
 DM_NVN_RT_CONTINUE	switch	`0` ends the pass whenever the game sets render targets, as before; by default SetRenderTargets naming the open pass's targets continues the pass
 DM_NVN_RT_DEAD	switch	`0` keeps every shared render target of a GPU-only pool while a texture object names it, as before; by default one another target drew over and that has not been used for 3 s is released once a second, and made again at its next use (`ab` alternates it with the `DM_AB` phases)
 DM_NVN_RT_RECYCLE	switch	`0` makes each render target in a GPU-only pool, each feedback snapshot and each resolution family heap its own exact Metal allocation, freed with its texture, as before; by default they are placed in heaps from one free list, and a freed one's heap waits, resident, for the next texture it fits (`ab` alternates it with the `DM_AB` phases)
+DM_NVN_RT_SUBSET	switch	`0` begins a pass of its own for targets that are the first ones of the open pass's, as before; by default the pass goes on with the others attached, unwritten (`rt_prefix`); `ab` alternates it with `DM_AB`
 DM_NVN_RUNTIME_COMPILER	path	Mac development runs: `dmsh_live.py` from the same checkout as the host. Compiles missing NVN1 vertex and pixel stages with the packer's toolchain and caches them under `DM_TEMP/nvn-shaders`.
 DM_NVN_RUNTIME_PYTHON	path	Mac development runs: the Python executable that runs `DM_NVN_RUNTIME_COMPILER`.
 DM_NVN_RUNTIME_SOURCE	switch	`1` makes the shader compiler emit Metal source for the host to compile with the Metal API. The Mac app launcher sets this when the compiler is bundled.
@@ -311,6 +312,7 @@ DM_NVN_UNWRITTEN_DC	switch	`0` disables optional stores elided for loaded, uncha
 DM_NVN_UPLOAD_IDLE_MS	switch	A positive interval in milliseconds enables idle trimming of completed upload staging. Defaults to `0` on all platforms. An explicit `0` keeps the slots and logs their sizes and allocation counts for comparison.
 DM_NVN_UPLOAD_REUSE	switch	0 keeps the original one-block upload-slot policy; default retains bounded demand-sized primary and overflow buffers after completion.
 DM_NVN_UPLOAD_SRC_MB	switch	positive MiB budget for an upload batch's zero-copy source buffers over guest memory; default `0` disables it. Flushes between textures; one oversized texture or a sparse gather can exceed the budget.
+DM_NVN_VBAR_PASS	switch	`0` ends the draw pass at an ordering barrier after vertex-stage shader writes, as before; by default a barrier inside the pass from the vertex stage keeps it (`ab` alternates it with `DM_AB`)
 DM_NVN_VBUF_CACHE	switch	`0` turns off the cache of resolved vertex stream addresses and vertex argument table writes across draws (on by default), for A/B runs
 DM_NVN_VCONV_CHECK	diagnostic	`=1` scans the indices again at every reuse of a cached vertex conversion range (`vconv_range`) and reports differences
 DM_NVN_VCONV_CPU	switch	`=1` converts on the CPU every vertex attribute Metal's fetch cannot read, as before, instead of through the shader's shadow inputs (`<key>_bv`) or its pulling entry (`<key>_bp`)
@@ -352,6 +354,7 @@ DM_PRESENT_SCREEN	switch	`0` turns off the acquire's wait for the screen of `DM_
 DM_PRESENT_SNAP	player	`=<n>`: present snapshots, a ring of n host textures (2 to 4; `1` = 2) the presents are copied to so the game's swapchain texture is free at once; `0` off (default: the profile's `present_snap`)
 DM_PRESENT_UPSCALE	player	`metalfx` scales a picture smaller than its rectangle on the screen through MetalFX's spatial scaler; `off` (the default) scales it bilinearly
 DM_PREV_PROGRAM	switch	What `oe::GetPreviousProgramIndex` answers (default -1, started from HOME); `oe::ExecuteProgram` sets it for the program it starts; a relaunch removes it
+DM_PREWARM_UPLOAD_URL	switch	`=<url>` (`pack_app.py`, `build_ipa.sh`): overrides `dm/services/prewarm-inbox/endpoint.txt` as `DMPrewarmUploadURL` in the packaged app's `Info.plist` for automatic NVN `pso_user.tsv` uploads (empty disables embedding a URL)
 DM_PROBE	diagnostic	`=module:offset,…` (Mac only): puts a `brk` at each guest address and on every hit prints the thread, registers, strings they point to and a backtrace, then runs the original instruction
 DM_PROBE_ALL	diagnostic	Set: probe hits (`DM_PROBE`) also print x8–x18
 DM_PROBE_DUMP	diagnostic	`=module:offset:length[:file]`: on the first hit of any probe, writes that range of guest memory to a file (default `run/<platform>/probe_dump.bin`)
@@ -495,7 +498,7 @@ DM_T_DUMP	test	`tests/t_blend_zero.m` prints the red channel each draw stored, r
 DM_UDC_SELFTEST	diagnostic	`=1` runs a start-up check of DontCare load and store on private depth-stencil and RGBA8 textures (clear, Load + DontCare, read back) and logs one result line
 DM_UE_SHADERS	path	Folder of the Unreal shader code archives decoded by `uepak.py`, for `shader_split.py` (default `ue_shaders` beside the RomFS); needed when the RomFS has Unreal paks
 DM_UE_TEXTURE_POOL	switch	Megabytes Unreal's texture streaming pool (`r.Streaming.PoolSize`) is raised to, overriding the profile's `ue_texture_pool`; `0` keeps the game's own pool. On iOS only this switch turns it on (`Documents/env.txt`)
-DM_UPSCALER	player	`metalfx` draws the game's own upscaler shaders (agl's NDSR network, found by the shader map) with MetalFX's spatial scaler; `game` (the default) runs them
+DM_UPSCALER	player	`metalfx` draws the game's own upscaler shaders (NDSR networks found by the shader map) with MetalFX's spatial scaler; `game` (the default) runs them; `ab` with `DM_AB=<frames>` draws it with MetalFX in every second phase (a measurement in one run)
 DM_VK_CAPTURE	path	`=<dir>` (Mac) writes every SPIR-V module the game creates to `<dir>/<key>.spv`; the NSP script's Vulkan shader capture stage sets it
 DM_VK_LOG	diagnostic	`=1` logs Vulkan object creation in the Vulkan-on-Metal layer
 DM_VSYNC_HZ	switch	`=<Hz>`: rate at which a host thread fires the vi vsync event when the display link does not drive it (default 60)
