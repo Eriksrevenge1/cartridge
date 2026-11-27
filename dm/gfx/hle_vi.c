@@ -254,9 +254,6 @@ HLE_FORCE("_ZN2nn2vi36SetDisplay120HzRefreshRateCapabilityEPNS0_7DisplayEb", "di
             vi_refresh_hz(), front_screen_max_fps(), vi_120_env() == 2 ? ", DM_DISPLAY_120=2 forces 120" : vi_allow120() ? "" : ", DM_DISPLAY_120=0");
     return RES_OK;
 }
-HLE_FORCE("_ZN2nn2vi30QueryDisplayCurrentRefreshRateEPNS0_11RefreshRateEPKNS0_7DisplayE", "display refresh rate (Switch 2): 60, or 120 while the game's 120 Hz capability holds",
-          Result, h_vi_Rate, uint32_t *rate, const void *disp) {
-    (void)disp; if (rate) *rate = (uint32_t)vi_refresh_hz(); return RES_OK; }
 HLE_FORCE("_ZN2nn2vi30QueryDisplayCurrentRefreshRateEPNS0_11RefreshRateEPbPKNS0_7DisplayE", "display refresh rate (Switch 2): 60, or 120 while the game's 120 Hz capability holds; a fixed rate",
           Result, h_vi_RateFixed, uint32_t *rate, uint8_t *variable, const void *disp) {
     (void)disp; if (rate) *rate = (uint32_t)vi_refresh_hz(); if (variable) *variable = 0; return RES_OK; }
@@ -282,10 +279,10 @@ HLE_FORCE("_ZN2nn2vi31QueryDisplayBufferMaxResolutionEPNS0_19BufferMaxResolution
 // The SDK only accepts its own default display (SDK 20.5.3, sdk+0x55dbd0). Answer for the display OpenDefaultDisplay returns here,
 // with the guest's fixed refresh rate in Hz. Cyberpunk 2077 treats a zero as VRR and keeps rebuilding its swap chain when trying to use four active textures.
 int nvn_vsync_hz(void);   // hle_nvn.c, shared with GetDisplayVsyncEvent's nominal pacing
-HLE_FORCE("_ZN2nn2vi30QueryDisplayCurrentRefreshRateEPNS0_11RefreshRateEPKNS0_7DisplayE", "display refresh rate in Hz from guest vsync", Result, h_vi_RefreshRate,
+HLE_FORCE("_ZN2nn2vi30QueryDisplayCurrentRefreshRateEPNS0_11RefreshRateEPKNS0_7DisplayE", "display refresh rate in Hz from guest vsync; 120 while the game's 120 Hz capability holds (Switch 2)", Result, h_vi_RefreshRate,
           uint32_t *out, const void *disp) {
     if (disp != &g_display) return 0x272;
-    if (out) *out = (uint32_t)nvn_vsync_hz();
+    if (out) *out = (uint32_t)(vi_refresh_hz() == 120 ? 120 : nvn_vsync_hz());   // 120 while a Switch 2 game's 120 Hz capability holds (above)
     return RES_OK;
 }
 // The extended swap interval asks for a presentation rate between whole vsync intervals (VRR); without VRR the swap interval NVN sets stays in effect
