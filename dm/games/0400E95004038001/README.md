@@ -111,7 +111,7 @@ function-matched `AddressRegionManager` cut, as Xenoblade DE's Switch 2 Edition'
 
 ## Shaders
 
-22,561 in [`shader_map.tsv`](shader_map.tsv): 16,330 pixel, 6,195 vertex, 33 compute, 3 geometry;
+22,561 in `shader_map.tsv` (generated at build time): 16,330 pixel, 6,195 vertex, 33 compute, 3 geometry;
 by source 17,370 from `bf2.ard`, 5,185 from the add-on and 6 from `main`'s standalone SLCT
 (`main+0xc34b20`); 16,956 pairs.
 
