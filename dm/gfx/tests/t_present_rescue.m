@@ -298,7 +298,9 @@ static void vrr120(void) {   // 60 and 30 fps in fullscreen on a variable-refres
     test_screen_hz = 0; link_sync(); CHECK("a screen of unknown rate keeps the 60 Hz link", g_link_mode == 1);
     test_screen_hz = 240; link_sync(); CHECK("a variable-refresh screen at 240 Hz takes the 120 Hz link", g_link_mode == 2);
     CHECK("a 240 Hz variable-refresh screen with a fixed 120 Hz mode switches to fixed 120 Hz", !front_mac_keep_vrr(FRONT_MAC_MATCH_AUTO, 1, test_match_fps, 120, mtl_link_vrr_120_hz(test_screen_hz)));
-    CHECK("a 240 Hz variable-refresh screen with only a fixed 60 Hz mode keeps variable refresh", front_mac_keep_vrr(FRONT_MAC_MATCH_AUTO, 1, test_match_fps, 60, mtl_link_vrr_120_hz(test_screen_hz)));
+    // Cartridge asks such a screen for 120 at 60 fps (m120), so a fixed 60 Hz mode is no candidate (pick 0): nothing is switched and the screen keeps variable refresh on the 120 Hz link
+    CHECK("a 240 Hz variable-refresh screen with only a fixed 60 Hz mode keeps variable refresh", test_match_fps == 120 && 60 % test_match_fps != 0 && g_link_mode == 2
+          && front_mac_keep_vrr(FRONT_MAC_MATCH_AUTO, 1, 60, 60, mtl_link_vrr_120_hz(test_screen_hz)));   // and were it asked for 60, it would keep it too
     test_screen_hz = 360; link_sync(); CHECK("a variable-refresh screen at 360 Hz takes the 120 Hz link", g_link_mode == 2 && link.preferredFrameRateRange.preferred == 120);
     test_variable_refresh = 0; link_sync(); CHECK("a fixed 360 Hz screen takes the 120 Hz link", g_link_mode == 2); test_variable_refresh = 1;
     test_screen_hz = 120; g_present_link_env = 1; link_sync(); CHECK("DM_PRESENT_LINK=1 keeps the 60 Hz link in fullscreen", g_link_mode == 1 && link.preferredFrameRateRange.preferred == 60);
@@ -342,12 +344,16 @@ static void vrr_agree(void) {
             if (test_match_fps > 0 && !fixed && !keep && pick_hz > 0) { fixed = 1; test_variable_refresh = 0; test_screen_hz = pick_hz; }
             link_sync();
         }
-        int want_kept = match == FRONT_MAC_MATCH_AUTO && !link_set && (fpss[f] == 60 || fpss[f] == 30)
-                        && screens[s].hz >= 120 && screens[s].hz % 120 == 0 && screens[s].fixed_hz < 120;
+        // Cartridge asks a variable-refresh screen above 120 Hz for 120 at 60 fps (link_sync's m120: a fixed 120 Hz mode keeps the 120 Hz link), so only a 120 Hz ProMotion screen is
+        // kept at 60 fps (nothing is switched on a 240 Hz one without a fixed 120 Hz mode either: no candidate); at 30 fps the screen is asked for 60 and every VRR multiple of 120 is kept
+        int want_kept = match == FRONT_MAC_MATCH_AUTO && !link_set && screens[s].hz >= 120 && screens[s].hz % 120 == 0 && screens[s].fixed_hz < 120
+                        && (fpss[f] == 30 || (fpss[f] == 60 && screens[s].hz == 120));
+        // a fixed-rate screen at a multiple of 120 Hz takes the 120 Hz link at 60 fps too (link_120_fixed), not at 30
+        int fixed_120 = fixed && test_screen_hz % 120 == 0 && fpss[f] == 60;
         int ok = kept == want_kept
                  && (!kept || g_link_mode == 2)
                  && !(test_variable_refresh && g_link_mode == 1)
-                 && !(fixed && g_link_mode == 2 && (fpss[f] == 60 || fpss[f] == 30) && link_set != 3)
+                 && !(fixed && g_link_mode == 2 && (fpss[f] == 60 || fpss[f] == 30) && link_set != 3 && !fixed_120)
                  && (link_set != 1 || test_match_fps == 0);
         cases++; bad += !ok;
         if (!ok) printf("  vrr_agree FAIL: match=%d link_set=%d hz=%d fixed_hz=%d fps=%d -> kept=%d fixed=%d mode=%d asked=%d\n",
