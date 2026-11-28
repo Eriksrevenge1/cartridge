@@ -26165,13 +26165,8 @@ static double link_gpu_lead(uint64_t frame, double t_in, double cb, double wk_cb
 // Once per frame the display-link callback takes (its thread): cb the callback's time, age how long the frame waited in the queue (both seconds), dropped whether older
 // frames were merged away on this tick, lead, gpu_lead and room the frame's CPU present and GPU completion after the callback that woke its acquire and that callback's room
 // (nvn_link_latch_spare; room 0 when the latch does not run for it, gpu_lead < 0 when GPU timing is unavailable). Asks the next acquire for the ticks the queued frames have
-<<<<<<< HEAD
-// to spare (g_link_drain_req). Not with present snapshots, which run the game a frame ahead on purpose, and not on the 120 Hz link: there the system already shows presents
-// late in variable-refresh fullscreen (link_120) with the queue's slack in place, and a drain there is unmeasured
-=======
 // to spare (g_link_drain_req). Not with present snapshots, which run the game a frame ahead on purpose. On the 120 Hz link the late latch stays off (room 0), so only
 // genuinely standing ticks (age >= 1/120 s + LINK_DRAIN_MARGIN) are drained, preserving the normal ~6.8 ms queue slack while clearing standing frames after startup or hitches
->>>>>>> upstream/main
 static void link_drain_note(double cb, double age, int dropped, double lead, double gpu_lead, double room) {
     if (!link_drain_on()) return;
     int rate = mtl_link_rate(), ok = !dropped && !mtl_snap_on();
