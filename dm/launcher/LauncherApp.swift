@@ -168,6 +168,11 @@ struct LibraryView: View {
             Alert(title: Text(e.game.name), message: Text(e.message),
                   primaryButton: .default(Text("Open Log")) { NSWorkspace.shared.open(e.game.log) }, secondaryButton: .cancel(Text("OK")))
         }
+        .background(EmptyView().alert(item: $library.compatOffer) { o in
+            Alert(title: Text("\(o.game.name) stuttered on your screen"),
+                  message: Text("About \(Int((o.late * 100).rounded())) % of its frames were shown late. Screen compatibility mode uses a simpler way of timing frames that works on most screens. You can change it later in the game's Settings, under Display."),
+                  primaryButton: .default(Text("Turn On")) { CompatMode.set(o.game, true) }, secondaryButton: .cancel(Text("No Thanks")))
+        })
     }
 
     private func bindPad() {
@@ -294,6 +299,7 @@ struct ScreenSection: View {
     @State private var choice = ""
     @State private var screens: [ScreenInfo] = ScreenInfo.all()
     @State private var windowed = true
+    @State private var compat = false   // Screen compatibility mode (Perf.swift CompatMode)
     private var prefs: UserDefaults? { UserDefaults(suiteName: game.bundleID) }
     /// The Display mode (launcher.DM_FULLSCREEN, or the game's env file): fullscreen sets the screen's rate for the game (front_mac.m screen_match_apply), a window cannot
     private func readMode() {
@@ -312,8 +318,13 @@ struct ScreenSection: View {
                 Text(warn).font(.footnote).foregroundStyle(.orange)
             }
             Text("Fullscreen sets the screen's refresh rate for the game by itself.").font(.footnote).foregroundStyle(.secondary)
+            Toggle(isOn: $compat) {
+                Text("Screen compatibility mode")
+                Text("Turn this on if the game stutters or looks jerky in fullscreen. It takes effect the next time the game starts.")
+            }
         } header: { Text("Display") }
-        .onAppear { choice = prefs?.string(forKey: "display.screen") ?? ""; screens = ScreenInfo.all(); readMode() }
+        .onAppear { choice = prefs?.string(forKey: "display.screen") ?? ""; compat = CompatMode.on(game); screens = ScreenInfo.all(); readMode() }
+        .onChange(of: compat) { CompatMode.set(game, compat) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in screens = ScreenInfo.all() }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in readMode() }
         .onChange(of: choice) { if choice.isEmpty { prefs?.removeObject(forKey: "display.screen") } else { prefs?.set(choice, forKey: "display.screen") } }

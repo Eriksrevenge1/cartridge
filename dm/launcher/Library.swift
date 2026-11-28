@@ -95,6 +95,7 @@ final class Library: ObservableObject {
     @Published var games: [Game] = []
     @Published var running: Set<String> = []   // game ids
     @Published var lastExit: GameExit?
+    @Published var compatOffer: CompatOffer?   // the last session stuttered on the screen: offer Screen compatibility mode (Perf.swift CompatMode)
     /// Games started for the first time since they were built, not yet open: macOS checks a new app's code signature over the whole bundle before it runs, which for a
     /// game of several GB can take minutes (the game page says so while it lasts)
     @Published var verifying: Set<String> = []
@@ -149,6 +150,8 @@ final class Library: ObservableObject {
         env["DM_LAUNCHER"] = "0"
         // the screen chosen in its settings (ScreenSection), for an app whose launcher does not read display.screen yet; an env file's DM_SCREEN still wins there
         if env["DM_SCREEN"] == nil, let s = UserDefaults(suiteName: g.bundleID)?.string(forKey: "display.screen"), !s.isEmpty, g.envFileValues()["DM_SCREEN"] == nil { env["DM_SCREEN"] = s }
+        // Screen compatibility mode (Perf.swift CompatMode): the plain 60 Hz display link; an env file's DM_PRESENT_LINK still wins
+        if env["DM_PRESENT_LINK"] == nil, CompatMode.on(g), g.envFileValues()["DM_PRESENT_LINK"] == nil { env["DM_PRESENT_LINK"] = "1" }
         let battery = BatteryPlan().overrides(for: g)   // lighter settings on battery (Power.swift)
         env.merge(battery) { _, b in b }
         batteryNote[g.id] = BatteryPlan.describe(battery)
@@ -165,6 +168,12 @@ final class Library: ObservableObject {
                 self.running.remove(g.id); self.processes[g.id] = nil; self.verifying.remove(g.id); self.batteryNote[g.id] = nil
                 let s = proc.terminationReason == .uncaughtSignal ? 128 + proc.terminationStatus : proc.terminationStatus
                 if s != 0 { self.lastExit = GameExit(game: g, status: s) }
+                else {   // a session that ended normally: did it stutter on the screen? (the log is read off the main thread; a crash's notice comes first)
+                    Task.detached(priority: .utility) {
+                        guard let p = SessionPerf.read(g), CompatMode.shouldOffer(g, p) else { return }
+                        await MainActor.run { if self.lastExit == nil { CompatMode.offered(g); self.compatOffer = CompatOffer(game: g, late: p.lateShare) } }
+                    }
+                }
                 NSApp.activate(ignoringOtherApps: true)
             }
         }

@@ -13,6 +13,7 @@ struct SessionPerf {
     var windows = 0             // 300-frame windows judged (the first minute of loading left out)
     var gpuP95 = 0.0, gpuP50 = 0.0, frameP95 = 0.0
     var dropped = 0, shown = 0
+    var late = 0                // frames that stayed on screen a refresh or more longer than the frame step holds them: the picture's pacing, not the game's speed
     var ended = Date.distantPast   // the log's last write: when the session ended
     var budget: Double { 1000 / Double(fpsCap) }
     var dropShare: Double { shown > 0 ? Double(dropped) / Double(shown) : 0 }
@@ -40,6 +41,10 @@ struct SessionPerf {
                 frame95.append(fp); gpu50.append(g50); gpu95.append(g95); p.windows += 1
             } else if line.contains("[nvn] on-screen up to frame "), skip > 12, let n = num(line, after: ": "), let d = num(line, after: "dropped ") {
                 p.shown += Int(n); p.dropped += Int(d)
+                if let iv = line.range(of: "two or more ") {
+                    let c = line[iv.upperBound...].prefix { "0123456789/ ".contains($0) }.split(separator: "/").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+                    if c.count == 3 { p.late += c[1] + c[2] }
+                }
             }
         }
         guard p.windows >= 12 else { return nil }   // two minutes or so after the first: enough windows that a cut scene or a menu does not decide
@@ -49,6 +54,11 @@ struct SessionPerf {
     }
 
     var struggling: Bool { dropShare > 0.05 || frameP95 > budget * 1.3 }
+    var lateShare: Double { shown > 0 ? Double(late) / Double(shown) : 0 }
+    /// The game kept up (its frames on time, the GPU with room) but the screen showed many of them a refresh late: the pacing on this screen stutters, which the plain
+    /// 60 Hz display link (DM_PRESENT_LINK=1, Screen compatibility mode) may not. A good session on a screen that suits it shows about 1-2 % (Ocarina of Time on a DELL
+    /// S2725QC at a fixed 120 Hz: 3-5 of 300)
+    var pacingStutter: Bool { lateShare > 0.04 && frameP95 <= budget * 1.1 && gpuP95 < budget * 0.8 }
 
     var summary: String {
         String(format: "Last session (%.0f min): %d fps cap, %.1f %% of frames late or dropped; GPU %.1f ms of the %.1f ms each frame has (p95)",
@@ -187,4 +197,27 @@ struct Game120Row: View {
                  : "This game can run at 120 fps. Turn it on in the game's own settings (often called Performance mode or Frame rate). It plays at 120 fps on a screen running at 120 Hz, and at 60 on a 60 Hz screen.\(ranLast ? " Your last session ran at 120 fps." : "")")
         }
     }
+}
+
+/// Screen compatibility mode, per game: the plain pacing upstream nxnative measured on most screens, the 60 Hz display link (DM_PRESENT_LINK=1; a variable-refresh screen goes
+/// to a fixed-rate mode in fullscreen), instead of Cartridge's own choice of link per screen (the 120 Hz link on screens at a multiple of 120 Hz). For a screen where the
+/// automatic pacing stutters. Kept in the game's preferences (display.compat) and handed to the host by Library.play, so it takes no rebuild; an env file's or the launch
+/// environment's DM_PRESENT_LINK wins. A start from Finder does not apply it (the game's own launcher does not read the key)
+enum CompatMode {
+    static func on(_ g: Game) -> Bool { UserDefaults(suiteName: g.bundleID)?.bool(forKey: "display.compat") ?? false }
+    static func set(_ g: Game, _ v: Bool) { UserDefaults(suiteName: g.bundleID)?.set(v, forKey: "display.compat") }
+    /// Whether to offer it after this session: it stuttered on the screen, the mode is off and nothing else sets the link, and it was not offered for this game before
+    /// (asked once; the switch in Settings stays for later)
+    static func shouldOffer(_ g: Game, _ p: SessionPerf) -> Bool {
+        guard p.pacingStutter, !on(g), g.envFileValues()["DM_PRESENT_LINK"] == nil, ProcessInfo.processInfo.environment["DM_PRESENT_LINK"] == nil else { return false }
+        return !(UserDefaults(suiteName: g.bundleID)?.bool(forKey: "display.compatOffered") ?? false)
+    }
+    static func offered(_ g: Game) { UserDefaults(suiteName: g.bundleID)?.set(true, forKey: "display.compatOffered") }
+}
+
+/// The question after a session that stuttered on the screen (Library.play's end)
+struct CompatOffer: Identifiable {
+    let id = UUID()
+    let game: Game
+    let late: Double   // share of frames shown late
 }
