@@ -157,6 +157,72 @@ static void invalid_descriptors(NvProg *p) {
         CHECK(!pso_build_ex(pso_desc(&k, p->sh[0], p->sh[1], nil, 0), 0, &error, compile), "invalid descriptor is rejected before either Metal compiler path");
         CHECK(error.code == 1 && [error.domain isEqual:@"nxnative.NVN.Pipeline"], "invalid descriptor reports an explicit input error");
     }
+    // Non-color-renderable colour attachments (e.g. Depth32Float from #3462) must be rejected before either Metal compiler path can abort or silently specialize.
+    const uint32_t bad_color[] = {PSO_D32, PSO_D16, PSO_S8, PSO_D32S8, PSO_X32S8, 130, 1, 0xffffffffu};
+    const int slots[] = {0, 3};
+    for (unsigned s = 0; s < sizeof slots / sizeof *slots; s++)
+        for (unsigned i = 0; i < sizeof bad_color / sizeof *bad_color; i++)
+            for (int compile = 0; compile <= 1; compile++) {
+                pso_key k = {.samples = 1}; k.cfmt[slots[s]] = bad_color[i];
+                NSError *error = nil;
+                CHECK(!pso_build_ex(pso_desc(&k, p->sh[0], p->sh[1], nil, 0), 0, &error, compile), "non-color-renderable attachment is rejected before either Metal compiler path");
+                CHECK(error.code == 1 && [error.domain isEqual:@"nxnative.NVN.Pipeline"], "non-color-renderable attachment reports an explicit input error");
+            }
+}
+
+// #3462: a depth texture on a colour slot is shadowed only through a matching colour view; without one it is omitted from the pass and prediction instead of producing cfmt=Depth32Float.
+// Prewarm parsing also drops any historical row whose colour or depth/stencil formats are not renderable.
+static void depth_as_color_and_prewarm(NvProg *p) {
+    tex_t d32 = texture(NVN_FORMAT_DEPTH32F), color = texture(NVN_FORMAT_RGBA8);
+    id<MTLTexture> mt_d32 = tex_mtl(&d32);
+    CHECK(mt_d32 != nil && mt_d32.pixelFormat == MTLPixelFormatDepth32Float, "Depth32Float test texture allocates");
+    if (!mt_d32) return;
+    // Prediction agrees with attach(): unshadowed depth on a colour slot resolves to Invalid (0); R32F colour view resolves to R32Float (55).
+    view_t r32v = {.set_format = 1, .format = NVN_FORMAT_R32F};
+    view_t d32v = {.set_format = 1, .format = NVN_FORMAT_DEPTH32F};
+    CHECK(rt_view_fmt_predict(&d32, mt_d32, NULL, 0) == MTLPixelFormatInvalid, "prediction omits unshadowed depth texture on a colour slot");
+    CHECK(rt_view_fmt_predict(&d32, mt_d32, &d32v, 1) == MTLPixelFormatInvalid, "prediction omits depth-viewed depth texture on a colour slot");
+    CHECK(rt_view_fmt_predict(&d32, mt_d32, &r32v, 1) == MTLPixelFormatR32Float, "prediction keeps R32Float shadow format for colour-viewed Depth32Float");
+
+    // Live pass with Depth32Float in color slot 0 (no colour view) beside a valid colour slot 1: slot 0 is dropped, g_pass.cfmt[0] stays 0.
+    state_reset(); memset(&R, 0, sizeof R);
+    R.has_rt = R.has_sc = 1; R.sc = (p_scissor){0, 0, 8, 8}; R.rt.n = 2;
+    R.rt.color[0] = &d32; R.rt.color[1] = &color;
+    mtl_sub_begin(); id<MTL4RenderCommandEncoder> e = rp_begin_ex(0);
+    CHECK(e != nil, "pass opens with valid sibling colour target when unshadowed depth colour slot is omitted");
+    CHECK(g_pass.cfmt[0] == 0 && g_pass.cfmt[1] == MTLPixelFormatRGBA8Unorm, "unshadowed Depth32Float never enters g_pass.cfmt");
+    mtl_sub_commit(); mtl_drain(); CHECK(!mtl_last_commit_error(), "omitted depth-as-colour pass completes cleanly");
+
+    // Live pass with Depth32Float in color slot 0 through an R32F view: shadowed to R32Float (55).
+    state_reset(); memset(&R, 0, sizeof R);
+    R.has_rt = R.has_sc = 1; R.sc = (p_scissor){0, 0, 8, 8}; R.rt.n = 1;
+    R.rt.color[0] = &d32; R.rt.has_cview[0] = 1; R.rt.cview[0] = r32v;
+    mtl_sub_begin(); e = rp_begin_ex(0);
+    CHECK(e != nil, "colour-viewed Depth32Float opens through shadow");
+    CHECK(g_pass.cfmt[0] == MTLPixelFormatR32Float, "colour-viewed Depth32Float records R32Float in g_pass.cfmt");
+    mtl_sub_commit(); mtl_drain(); CHECK(!mtl_last_commit_error(), "shadowed Depth32Float pass completes cleanly");
+
+    // warm_parse skips R rows with non-color-renderable cfmt (such as historical Depth32Float) while retaining valid rows.
+    char tmp[] = "/tmp/t_pso_ds_warm.XXXXXX"; int fd = mkstemp(tmp);
+    CHECK(fd >= 0, "temporary prewarm list creates");
+    if (fd >= 0) {
+        pso_key bad = {.samples = 1}, good = {.samples = 1}; bad.cfmt[0] = PSO_D32; good.cfmt[0] = MTLPixelFormatR32Float;
+        pso_skey sbad, sgood; char hbad[sizeof sbad * 2 + 1], hgood[sizeof sgood * 2 + 1];
+        pso_skey_from(&bad, p->sh[0], p->sh[1], 0, NULL, &sbad); pso_skey_hex(&sbad, hbad);
+        pso_skey_from(&good, p->sh[0], p->sh[1], 0, NULL, &sgood); pso_skey_hex(&sgood, hgood);
+        dprintf(fd, "R\t%s\nR\t%s\n", hbad, hgood); close(fd);
+        NSMutableDictionary<NSString *, NSString *> *saved_map = g_shmap;
+        g_shmap = [@{@"ds-vs": @"vertex", @"ds-fs": @"pixel"} mutableCopy];
+        long lines = 0; NSArray<WarmTask *> *tasks = warm_parse(@[@(tmp)], &lines);
+        g_shmap = saved_map;
+        unlink(tmp);
+        CHECK(lines == 1 && tasks.count == 1 && tasks[0]->rs.count == 1, "warm_parse drops Depth32Float colour row and keeps valid R32Float row");
+        if (tasks.count == 1 && tasks[0]->rs.count == 1) {
+            pso_skey got; [tasks[0]->rs[0] getBytes:&got length:sizeof got];
+            CHECK(got.k.cfmt[0] == MTLPixelFormatR32Float, "retained warm_parse row has the valid colour format");
+        }
+    }
+    mtl_tex_release(&d32); mtl_tex_release(&color);
 }
 
 static void prediction(id<MTLLibrary> lib) {
@@ -247,7 +313,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         "vertex float4 v(uint n[[vertex_id]]) { float2 p[3]={float2(-1,-1),float2(3,-1),float2(-1,3)}; return float4(p[n],.75,1); }\n"
         "fragment float4 f() { return float4(0,0,1,1); }\n" options:nil error:&error];   // no base made from it either, for the stand-in case
     CHECK(cold != nil, "third synthetic library compiles"); if (!cold) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 1; }
-    NvProg *p = program(lib); draws(p); invalid_descriptors(p); prediction(fresh); prediction_made_base(lib); prediction_standin(cold, lib);
+    NvProg *p = program(lib); draws(p); invalid_descriptors(p); depth_as_color_and_prewarm(p); prediction(fresh); prediction_made_base(lib); prediction_standin(cold, lib);
     const char *mode = getenv("DM_PSO_MTL4");
     CHECK((g_comp4 != nil) == (!mode || strcmp(mode, "0") != 0), "requested pipeline compiler path is exercised");
     printf("depth/stencil pipelines: %d checks, %d failed (%s)\n", checks, failed, g_comp4 ? "Metal 4" : "MTLDevice");

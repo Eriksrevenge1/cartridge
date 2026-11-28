@@ -105,9 +105,23 @@ int main(void) {
         stable.k.vs = (void *)1; pso_skey_hex(&stable, hex); assert(pso_mesh_skey_parse(hex, &parsed) < 0);
         stable.k.vs = NULL;
         stable.k.dfmt = 80; pso_skey_hex(&stable, hex); assert(pso_mesh_skey_parse(hex, &parsed) < 0);
+        stable.k.dfmt = 252;
+        stable.k.cfmt[0] = PSO_D32; pso_skey_hex(&stable, hex); assert(pso_mesh_skey_parse(hex, &parsed) < 0);
+        stable.k.cfmt[0] = 130; pso_skey_hex(&stable, hex); assert(pso_mesh_skey_parse(hex, &parsed) < 0);
+        stable.k.cfmt[0] = 80;
         pso_skey_from(&k, ms, nil, 0, NULL, &stable); pso_skey_hex(&stable, hex);
         assert(pso_mesh_skey_parse(hex, &parsed) == 0 && !parsed.fs[0]);
         assert(pso_mesh_skey_parse(hex + 1, &parsed) < 0);
+    }
+    // pso_color_valid / pso_formats_valid: accept uncompressed color-renderable formats and reject depth/stencil, compressed, or unknown formats
+    {
+        const uint32_t ok[] = {0, 10, 13, 25, 40, 55, 70, 80, 90, 92, 93, 113, 115, 125};
+        const uint32_t bad[] = {1, 130, 140, 152, 186, 204, PSO_D16, PSO_D32, PSO_S8, PSO_D32S8, PSO_X32S8, 0xffffffffu};
+        for (unsigned i = 0; i < sizeof ok / sizeof *ok; i++) assert(pso_color_valid(ok[i]));
+        for (unsigned i = 0; i < sizeof bad / sizeof *bad; i++) assert(!pso_color_valid(bad[i]));
+        uint32_t cf[8] = {55, 0, 70};
+        assert(pso_formats_valid(cf, PSO_D32, 0));
+        cf[3] = PSO_D32; assert(!pso_formats_valid(cf, 0, 0));
     }
     puts("PSO_SKEY OK render and native mesh keys round-trip; malformed and incompatible rows rejected");
     return 0;

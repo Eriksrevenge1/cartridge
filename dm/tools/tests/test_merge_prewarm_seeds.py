@@ -20,10 +20,15 @@ UPDATE_COMPUTE = '0000000000000007_b'
 UPDATE_BUILD = 'a' * 32
 
 
-def key(shader, stage=0, fragment='', fs_stage=1):
-    # Shader names in the vertex and optional fragment slots of pso_skey, with zeroed render state.
+def key(shader, stage=0, fragment='', fs_stage=1, cfmt0=0, dfmt=0, sfmt=0):
+    # Shader names in the vertex and optional fragment slots of pso_skey, with optional attachment formats.
+    body = bytearray(462)
+    # pso_skey layout: header (50 bytes before body), then 54 bytes to k.cfmt[0] (offset 104), 86 to dfmt (136), 90 to sfmt (140).
+    body[54:58] = cfmt0.to_bytes(4, 'little')
+    body[86:90] = dfmt.to_bytes(4, 'little')
+    body[90:94] = sfmt.to_bytes(4, 'little')
     return (shader.encode().ljust(24, b'\0') + fragment.encode().ljust(24, b'\0')
-            + bytes([stage, fs_stage if fragment else 0]) + bytes(462)).hex()
+            + bytes([stage, fs_stage if fragment else 0]) + bytes(body)).hex()
 
 
 @unittest.skipUnless(shutil.which('clang'), 'the host parser needs clang')
@@ -354,6 +359,22 @@ class ImportSeeds(unittest.TestCase):
         )
         rejected = self.run_import('--apply').stdout
         self.assertIn('3 invalid pipeline, 1 missing shader, 1 stage mismatch', rejected)
+        self.assertTrue(bad_capture.is_file())
+
+    def test_rejects_non_color_renderable_and_invalid_attachment_formats(self):
+        good = f'R\t{key(SECOND_VERTEX, cfmt0=55, dfmt=252)}'
+        bad_capture = self.upload(
+            good,
+            f'R\t{key(SECOND_VERTEX, cfmt0=252)}',      # Depth32Float in colour slot 0 (#3462)
+            f'R\t{key(SECOND_VERTEX, cfmt0=130)}',      # BC1 in colour slot 0
+            f'R\t{key(SECOND_VERTEX, dfmt=70)}',        # RGBA8Unorm in depth slot
+            f'R\t{key(SECOND_VERTEX, dfmt=250, sfmt=260)}',  # conflicting depth/stencil
+            f'M\t{TASK}\t{key(MESH, 4, cfmt0=252)}',    # Depth32Float in mesh colour slot 0
+        )
+        applied = self.run_import('--apply').stdout
+        self.assertIn('1 added, 5 invalid pipeline', applied)
+        self.assertIn(good + '\n', self.manifest.read_text())
+        self.assertNotIn(key(SECOND_VERTEX, cfmt0=252), self.manifest.read_text())
         self.assertTrue(bad_capture.is_file())
 
     def test_rejected_push_keeps_capture(self):

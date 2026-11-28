@@ -1042,7 +1042,7 @@ done:
 // ---------- the host: the first mount, the sender, flushes ----------
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER, g_mount_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
-static _Atomic int g_on;
+static _Atomic int g_on, g_offline;
 static int g_mounted, g_want, g_busy, g_failed;   // the mount ran; a send asked for without a Commit (the mount found this save newer, a flush); a send running; the last one failed
 static uint64_t g_commits, g_sent;                // Commits seen; the Commits the last send covered
 static char g_save[PATH_MAX], g_title[24], g_cloud[PATH_MAX];
@@ -1084,13 +1084,19 @@ static int mount_once(const char *save, const char *title) {
     }
     clean_backup_staging(save);
     if (!cloud_file(title, cloud, sizeof cloud)) { keep_start_copy(save, NULL); return 0; }
+    choice_kind choice = read_choice(chosen);
+    if (choice == CH_OFFLINE) {
+        SLOG("the player chose to play with this device's save without the cloud's; it is not sent until it has been compared with the cloud's");
+        keep_start_copy(save, NULL);
+        atomic_store(&g_offline, 1);
+        return 0;
+    }
     SLOG("on: %s", cloud);
     snprintf(tmp, sizeof tmp, "%s.sync-tmp", save); snprintf(theirs, sizeof theirs, "%s/in.dmsync", tmp);
     if (rm_tree(tmp) || mkdirs(tmp)) { SRED("cannot make %s (errno=%d): off", tmp, errno); keep_start_copy(save, NULL); return 0; }   // rm_tree: what an earlier session left
     if (ss_scan(save, &mine)) { SRED("this device's save %s cannot be read (errno=%d): off", save, errno); return 0; }
     read_base(save, base);
-    choice_kind choice = read_choice(chosen);
-    int got = choice == CH_OFFLINE ? -1 : fetch_timed(cloud, theirs, FETCH_MS, NULL), both = 0, failed = 0, damaged = 0, pulled = 0, pr;
+    int got = fetch_timed(cloud, theirs, FETCH_MS, NULL), both = 0, failed = 0, damaged = 0, pulled = 0, pr;
     if (got > 0 && ss_read(theirs, NULL, &other)) { SRED("the cloud's save %s is damaged: playing on with this device's, which replaces it (the damaged file is kept)", cloud); got = 0; damaged = 1; }
     else if (got > 0 && strcasecmp(other.title, title)) { SRED("the cloud's save %s is %s's, not %s's: not used", cloud, other.title, title); got = -1; }
     if (got < 0) { SLOG("playing on with this device's save; it is not sent until it has been compared with the cloud's"); failed = 1; }
@@ -1101,7 +1107,7 @@ static int mount_once(const char *save, const char *title) {
         if (strcmp(choice == CH_CLOUD ? chosen : (*chosen ? chosen : "none"), now))   // the way stays ss_decide's: a save that changed on both sides is replaced on neither
             SRED("the cloud's save changed after the player chose (now %s): the choice is not used", now);
         else way = choice == CH_CLOUD ? SS_PULL : SS_PUSH;
-    } else if (choice == CH_OFFLINE) SLOG("the player chose to play with this device's save without the cloud's");
+    }
     switch (way) {
     case SS_PULL:
         when(other.saved, t, sizeof t);
@@ -1207,6 +1213,7 @@ void save_sync_committed(void) {
 }
 
 int save_sync_flush(int timeout_ms) {
+    if (atomic_load(&g_offline)) return 0;
     if (!atomic_load(&g_on)) return 1;
     struct timespec ts; deadline(timeout_ms, &ts);
     pthread_mutex_lock(&g_mu);
@@ -1218,12 +1225,14 @@ int save_sync_flush(int timeout_ms) {
 }
 
 int save_sync_after_exit(const char *save, const char *title) {   // save: DM_SAVE, its trailing slashes stripped as h_fs_MountSave strips them (the same <save>.sync and <save>-backups)
-    char cloud[PATH_MAX], dd[PATH_MAX];
+    char cloud[PATH_MAX], dd[PATH_MAX], chosen[SS_HASH + 1];
     if (!save || !*save) return 1;
     snprintf(dd, sizeof dd, "%s", save); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;
     pull_journal j;
     if (journal_read(dd, &j)) { SRED("a pull of the cloud's save did not finish: nothing is sent until the next start puts this device's save back"); return 0; }   // what is in place may be half the cloud's
-    return !cloud_file(title, cloud, sizeof cloud) || send_save(dd, title, cloud);
+    if (!cloud_file(title, cloud, sizeof cloud)) return 1;
+    if (read_choice(chosen) == CH_OFFLINE) { SLOG("the player chose to play without the cloud's save: not sent after exit"); return 0; }
+    return send_save(dd, title, cloud);
 }
 
 // ---------- the platform's parts: POSIX primitives shared by the weak defaults and save_sync_apple.m's NSFileCoordinator accessors ----------

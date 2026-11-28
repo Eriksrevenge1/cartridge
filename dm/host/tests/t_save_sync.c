@@ -317,6 +317,34 @@ int main(void) {
     CHECK(run(M, cloud2, NULL, NULL, choice_of("cloud", cf2), NULL, READABLE) == 0 && same(p, "p1"), "with the cloud back, the player chooses the iPhone's: it comes in");
     backup_of(M, "local", back, sizeof back); snprintf(q, sizeof q, "%s/save/game.dat", back);
     CHECK(*back && same(q, "m3"), "and the Mac's m3 is kept (%s)", back);
+    // Offline session must never send even when the cloud folder is empty or becomes readable during play, on both sender and Mac post-exit paths
+    {   char OF[1200], ocloud[1200], ocf[1400], op[1400];
+        snprintf(OF, sizeof OF, "%s/offline_fresh/save", root); snprintf(ocloud, sizeof ocloud, "%s/iCloud Drive/Offline Fresh", root);
+        mkd(OF); mkd(ocloud); snprintf(ocf, sizeof ocf, "%s/%s/save.dmsync", ocloud, id);
+        snprintf(op, sizeof op, "%s/game.dat", OF); put(op, "seed");
+        CHECK(run(OF, ocloud, "game.dat", "off1", "offline", NULL, READABLE) == NOT_SENT && same(op, "off1") && !exists(ocf),
+              "offline session with fresh cloud: local save intact, flush reports unsent, no cloud file created");
+        backup_of(OF, "start", back, sizeof back); snprintf(q, sizeof q, "%s/save/game.dat", back);
+        CHECK(*back && same(q, "seed"), "offline session still keeps the normal start backup (%s)", back);
+        setenv("DM_SAVE_SYNC", ocloud, 1); setenv("DM_SAVE_SYNC_CHOICE", "offline", 1);
+        CHECK(save_sync_after_exit(OF, DM_GAME_ID) == 0 && !exists(ocf),
+              "offline post-exit sender reports unsent and creates no cloud file");
+        unsetenv("DM_SAVE_SYNC_CHOICE"); unsetenv("DM_SAVE_SYNC");
+        CHECK(run(OF, ocloud, NULL, NULL, "ask", NULL, READABLE) == 0 && same(op, "off1") && cloud_has(ocf, root, "game.dat", "off1"),
+              "following ordinary launch compares and sends the offline save");
+        // Previously synced cloud that becomes readable during play: offline still suppresses sending, next ordinary launch syncs
+        CHECK(run(M, cloud2, "game.dat", "m4", "offline", cf2, LATE) == NOT_SENT && same(p, "m4") && cloud_has(cf2, root, "game.dat", "p1"),
+              "offline session on previously synced save whose cloud becomes readable during play: unsent, cloud untouched");
+        setenv("DM_SAVE_SYNC", cloud2, 1); setenv("DM_SAVE_SYNC_CHOICE", "offline", 1);
+        CHECK(save_sync_after_exit(M, DM_GAME_ID) == 0 && cloud_has(cf2, root, "game.dat", "p1"),
+              "offline post-exit sender leaves previously synced cloud untouched");
+        unsetenv("DM_SAVE_SYNC_CHOICE"); unsetenv("DM_SAVE_SYNC");
+        CHECK(run(M, cloud2, NULL, NULL, "ask", NULL, READABLE) == 0 && same(p, "m4") && cloud_has(cf2, root, "game.dat", "m4"),
+              "following ordinary launch sends the offline progress over the unchanged cloud base");
+        // Restore cloud2/M to p1 so later sections see the same state as before
+        CHECK(session(P2, cloud2, "game.dat", "p1") == 0 && session(M, cloud2, NULL, NULL) == 0 && cloud_has(cf2, root, "game.dat", "p1"),
+              "restore cloud2 to p1 for subsequent checks");
+    }
 
     printf("(12) the first play on a new Mac\n");
     snprintf(p, sizeof p, "%s/game.dat", N);

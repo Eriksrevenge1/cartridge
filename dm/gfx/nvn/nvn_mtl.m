@@ -43,6 +43,7 @@
 #include "nvn_link_latch.h"
 #include "nvn_present_history.h"
 #include "nvn_timestamp.h"
+#include "nvn_pso_ds.h"
 #include "msl_image.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
@@ -3765,7 +3766,7 @@ static BOOL obj_is_tex(id object) {
     return is_texture;
 }
 
-static int g_red_once[182];   // one past the highest key: a new key raises this, and the macro refuses to compile otherwise
+static int g_red_once[183];   // one past the highest key: a new key raises this, and the macro refuses to compile otherwise
 #define RED_ONCE(k, ...) do { _Static_assert((k) < sizeof g_red_once / sizeof *g_red_once, "a RED_ONCE key past g_red_once: raise its size"); if (!g_red_once[k]++) MLOG("[RED] " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
 // and the host's own vertex functions read no vertex buffers. 13 Sentinels uses stream 15, and the old 16 + stream went out of range (Metal assertion: buffer index (31) must be < 31)
@@ -8133,13 +8134,14 @@ static void rt_view_upgrade_all(int clear_only) {
         rt_view_upgrade(R.rt.color[i], tex_mtl_replay(R.rt.color[i]), &R.rt.cview[i]);
     }
 }
-// The colour format a pass will attach for this slot, for the pipeline prediction: the view's format when attach will upgrade the texture for it
+// The colour format a pass will attach for this slot, for the pipeline prediction: the view's format when attach will upgrade the texture for it, Invalid if non-color-renderable
 static MTLPixelFormat rt_view_fmt_predict(const tex_t *t, id<MTLTexture> base, const view_t *v, int has_v) {
     MTLPixelFormat want;
-    if (has_v && rtv_upgradable(t, base, v, &want)) return want;
-    return rt_view_fmt(base, v, has_v);
+    if (has_v && rtv_upgradable(t, base, v, &want)) return pso_color_valid((uint32_t)want) ? want : MTLPixelFormatInvalid;
+    MTLPixelFormat pf = rt_view_fmt(base, v, has_v);
+    return pso_color_valid((uint32_t)pf) ? pf : MTLPixelFormatInvalid;
 }
-static void attach(MTLRenderPassAttachmentDescriptor *a, const tex_t *t, const view_t *v, int has_v) {
+static void attach(MTLRenderPassAttachmentDescriptor *a, const tex_t *t, const view_t *v, int has_v, int is_color) {
     id<MTLTexture> base = tex_mtl_replay(t); sparse_gpu_wrote(t); tu_wrote(base); bcp_wrote(t, base);
     // A texture made without render-target use (packaged or CPU-written, uploaded from its storage) drawn into: give it that use, as a clear of one does (clear_tex). Metal's validation
     // stops at such an attachment; without it Tears of the Kingdom drew its terrain normal maps into textures made for reading only
@@ -8148,13 +8150,20 @@ static void attach(MTLRenderPassAttachmentDescriptor *a, const tex_t *t, const v
     if (has_v && v->set_levels) a.level = v->base_level;
     if (has_v && v->set_layers) { if (t->d.target == 2) a.depthPlane = v->min_layer; else a.slice = v->min_layer; }
     if (base && mtl_fmt_block(base.pixelFormat)) { if (!bcrt_attach(a, base, v, has_v)) { rt_view_fmt(base, v, has_v); a.texture = nil; } return; }   // compressed formats: a shadow or nothing (see rt_view_fmt)
-    if (base && mtl_fmt_depth(base.pixelFormat) && bcrt_attach(a, base, v, has_v)) return;   // a depth texture through a colour view: a shadow (see shrt_block)
+    if (base && mtl_fmt_depth(base.pixelFormat) && is_color) {   // a depth texture on a colour slot: draw through a colour shadow, else omit (never leave a depth format on colorAttachments[i], #3462)
+        if (!bcrt_attach(a, base, v, has_v)) {
+            RED_ONCE(182, "color render target is a depth/stencil texture (Metal format %lu %lux%lu layers %lu, view format change %d -> NVN %#x): not attached; draws to this attachment are lost",
+                     (unsigned long)base.pixelFormat, (unsigned long)base.width, (unsigned long)base.height, (unsigned long)base.arrayLength, has_v ? v->set_format : 0, has_v ? v->format : 0);
+            a.texture = nil;
+        }
+        return;
+    }
     // A view that changes the format is attached as a Metal view of that format (pipeline formats follow the attachment). SMBW's last pass writes the RGBA8 swapchain texture through an RGBA8_SRGB view, so the hardware encodes sRGB on write;
     // attaching the base texture instead stored the linear values as they were and the whole picture came out dark (every value decoded from sRGB once more, on the Mac and the iPhone). The view lives until this submission completes
     if (base && has_v && v->set_format) {
         base = rt_view_upgrade(t, base, v); a.texture = base;
         MTLPixelFormat pf = rt_view_fmt(base, v, has_v);
-        if (pf != base.pixelFormat) {
+        if (pf != base.pixelFormat && (!is_color || pso_color_valid((uint32_t)pf))) {
             id<MTLTexture> vw = [base newTextureViewWithPixelFormat:pf];
             if (vw) { a.texture = vw; defer_obj_unref(vw); }
             else { RED_ONCE(67, "cannot create the render target view: format %#x (base texture Metal format %lu)", v->format, (unsigned long)base.pixelFormat); rtv_note_bad_pair(base.pixelFormat, pf); }
@@ -8162,6 +8171,7 @@ static void attach(MTLRenderPassAttachmentDescriptor *a, const tex_t *t, const v
             if (nvn_fmt_to_mtl(v->format, &want, swz) && want && want != (uint32_t)base.pixelFormat)
                 RED_ONCE(68, "render target view format %#x cannot be attached (base texture Metal format %lu was created without the format-view usage): drawing in the base format", v->format, (unsigned long)base.pixelFormat); }
     }
+    if (is_color && a.texture && !pso_color_valid((uint32_t)a.texture.pixelFormat)) a.texture = nil;
 }
 // clear_only: a pass opened only to land pending clears, attaching only the attachments that have clears - the other attachments are not touched by this pass, and attaching them costs a pointless load and store on TBDR
 // (Mac character select screen: the color-clear pass drags along a 400x225 depth load and store)
@@ -8186,7 +8196,7 @@ static void *rp_begin_ex_(int clear_only) {
     for (int i = 0; i < R.rt.n; i++) {
         if (!R.rt.color[i] || (clear_only == 1 && !R.clear_c[i]) || (g_geo_omit_colors && !R.clear_c[i])) continue;
         if (rt_dup_slot(&R.rt, i)) continue;   // a slot attached twice is not attached (see rt_dup_slot)
-        attach(pd.colorAttachments[i], R.rt.color[i], &R.rt.cview[i], R.rt.has_cview[i]);
+        attach(pd.colorAttachments[i], R.rt.color[i], &R.rt.cview[i], R.rt.has_cview[i], 1);
         if (!pd.colorAttachments[i].texture) continue;
         any = 1;
         pd.colorAttachments[i].loadAction = R.clear_c[i] ? MTLLoadActionClear : MTLLoadActionLoad;
@@ -8237,7 +8247,7 @@ static void *rp_begin_ex_(int clear_only) {
     }
     // clear_only: 0 attach all, 1 only those with clears
     if (R.rt.depth && !(clear_only == 1 && !R.clear_d && !R.clear_s)) {
-        attach(pd.depthAttachment, R.rt.depth, &R.rt.dview, R.rt.has_dview);
+        attach(pd.depthAttachment, R.rt.depth, &R.rt.dview, R.rt.has_dview, 0);
         id<MTLTexture> t = pd.depthAttachment.texture;
         MTLPixelFormat pf = t.pixelFormat;
         // Combined storage stays on both attachments: single-plane descriptors work
@@ -13972,15 +13982,32 @@ static MTL4RenderPipelineDescriptor *spec_desc(id base, _Atomic int *own) {   //
     return s;
 }
 static _Atomic int g_spec_own;
+static int pso_desc_formats_valid(MTLRenderPipelineDescriptor *d, int *bad_slot, uint32_t *bad_fmt) {
+    for (int i = 0; i < 8; i++) {
+        uint32_t pf = (uint32_t)d.colorAttachments[i].pixelFormat;
+        if (!pso_color_valid(pf)) {
+            if (bad_slot) *bad_slot = i;
+            if (bad_fmt) *bad_fmt = pf;
+            return 0;
+        }
+    }
+    if (bad_slot) *bad_slot = -1;
+    return pso_ds_valid((uint32_t)d.depthAttachmentPixelFormat, (uint32_t)d.stencilAttachmentPixelFormat);
+}
 // The pipeline pso_desc describes: its base (built, from the archive or already made), then specialized with its colour state. Called on several threads.
 // compile 0: nil on an archive miss (*e untouched), with no MTLDevice fallback. Prewarm compaction may still refresh a found base for serialization.
 static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, int off, NSError **e, int compile) {
-    // Do not send conflicting or non-renderable aspect formats to Metal, which can
-    // abort instead of returning an NSError (also on the MTLDevice fallback).
-    if (!pso_ds_valid((uint32_t)d.depthAttachmentPixelFormat, (uint32_t)d.stencilAttachmentPixelFormat)) {
-        if (e) *e = [NSError errorWithDomain:@"nxnative.NVN.Pipeline" code:1
-            userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"invalid depth/stencil pipeline formats %lu/%lu (compile=%d)",
-                (unsigned long)d.depthAttachmentPixelFormat, (unsigned long)d.stencilAttachmentPixelFormat, compile]}];
+    // Do not send conflicting or non-renderable attachment formats to Metal, which can
+    // abort instead of returning an NSError (also on the MTLDevice fallback and whole MTL4 builds).
+    int bad_slot = -1; uint32_t bad_fmt = 0;
+    if (!pso_desc_formats_valid(d, &bad_slot, &bad_fmt)) {
+        if (e) {
+            NSString *msg = bad_slot >= 0
+                ? [NSString stringWithFormat:@"invalid color attachment %d pipeline format %u (compile=%d)", bad_slot, bad_fmt, compile]
+                : [NSString stringWithFormat:@"invalid depth/stencil pipeline formats %lu/%lu (compile=%d)",
+                    (unsigned long)d.depthAttachmentPixelFormat, (unsigned long)d.stencilAttachmentPixelFormat, compile];
+            *e = [NSError errorWithDomain:@"nxnative.NVN.Pipeline" code:1 userInfo:@{NSLocalizedDescriptionKey: msg}];
+        }
         return nil;
     }
     pso4_init();
@@ -14892,7 +14919,7 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
                 if (stage_of(warm_map_stage(c[1])) != 5) continue;
                 t = [WarmTask new]; t->kind = 2; t->key = c[1]; t->stage = 5; [tasks addObject:t];
             } else if ([c[0] isEqualToString:@"R"] && c.count >= 2) {
-                pso_skey sk; if (pso_skey_parse(c[1].UTF8String, &sk)) continue;
+                pso_skey sk; if (pso_skey_parse(c[1].UTF8String, &sk) || !pso_formats_valid(sk.k.cfmt, sk.k.dfmt, sk.k.sfmt)) continue;
                 NSData *kd = [NSData dataWithBytes:&sk length:sizeof sk]; if ([seen_k containsObject:kd]) continue;
                 [seen_k addObject:kd];
                 NSString *vkey = warm_key(sk.vs, sizeof sk.vs), *fkey = warm_key(sk.fs, sizeof sk.fs);
@@ -18567,7 +18594,7 @@ static int pso_base_made_d(const pso_key *k, NvShader *vs, NvShader *fs, MTLRend
     if (dp) *dp = nil; if (bkp_ok) *bkp_ok = 0;
     pso4_init(); if (!g_comp4) return 0;
     MTLRenderPipelineDescriptor *d = pso_desc(k, vs, fs, nil, 0); if (dp) *dp = d;
-    if ([d.label isEqualToString:PSO_WHOLE] || !pso_ds_valid((uint32_t)d.depthAttachmentPixelFormat, (uint32_t)d.stencilAttachmentPixelFormat)) return 0;
+    if ([d.label isEqualToString:PSO_WHOLE] || !pso_desc_formats_valid(d, NULL, NULL)) return 0;
     pbase_key bk; pbase_key_of(d, pso_off(k, fs, 0), &bk); if (bkp) { *bkp = bk; *bkp_ok = 1; }
     os_unfair_lock_lock(&g_pbase_lock); int made = hm_get_id(&g_pbase, &bk) != nil; os_unfair_lock_unlock(&g_pbase_lock);
     return made;
@@ -18630,7 +18657,8 @@ static void pso_predict_rest_(void) {
                 if (!color || rt_dup_slot(r, i) || nvn_fmt_bc(color->d.format)) continue;   // BC targets are never attached directly (see attach)
                 id<MTLTexture> t = tex_made(color);
                 if (!t) { targets_known = 0; break; }
-                cf[i] = (uint32_t)rt_view_fmt_predict(color, t, &r->cview[i], r->has_cview[i]); samples = (uint32_t)t.sampleCount;
+                uint32_t cpf = (uint32_t)rt_view_fmt_predict(color, t, &r->cview[i], r->has_cview[i]);
+                if (cpf) { cf[i] = cpf; samples = (uint32_t)t.sampleCount; }
             }
             id<MTLTexture> dt = r->depth ? tex_made(r->depth) : nil;
             if (r->depth && !dt) targets_known = 0;
@@ -20598,7 +20626,7 @@ static void fsm_attach(MTL4RenderPassDescriptor *pd) {
     MTLRenderPassColorAttachmentDescriptor *c0 = pd.colorAttachments[0]; NSUInteger nl = pd.renderTargetArrayLength ? pd.renderTargetArrayLength : 1;
     for (int k = 0; k < g_fsm_np && k < FSM_MAX; k++) { fsm_draw *m = &g_fsm[k]; MTLRenderPassColorAttachmentDescriptor *c = pd.colorAttachments[k + 1];
         if (c.texture || !c0.texture) break;
-        attach(c, m->rt.color[0], &m->rt.cview[0], m->rt.has_cview[0]);
+        attach(c, m->rt.color[0], &m->rt.cview[0], m->rt.has_cview[0], 1);
         id<MTLTexture> t = c.texture;
         NSUInteger layers = t.textureType == MTLTextureTypeCube || t.textureType == MTLTextureTypeCubeArray ? t.arrayLength * 6 : t.arrayLength;
         if (!t || c.level != m->level || t.pixelFormat != c0.texture.pixelFormat || t.textureType == MTLTextureType2D || t.textureType == MTLTextureType3D || m->slice + nl > layers

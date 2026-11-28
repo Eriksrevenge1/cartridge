@@ -83,6 +83,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [Mario Kart World](#mario-kart-world) | 0 | 0 | 1 | 0 | 0 | `game` |
 | [METAL GEAR SOLID: Peace Walker - Master Collection Version (Game)](#metal-gear-solid-peace-walker---master-collection-version-game) | 0 | 0 | 3 | 0 | 0 | `game` |
 | [Monster Hunter Rise](#monster-hunter-rise) | 0 | 0 | 0 | 0 | 1 | `build` → `engine` |
+| [NARUTO SHIPPUDEN: ULTIMATE NINJA STORM 4 ROAD TO BORUTO](#naruto-shippuden-ultimate-ninja-storm-4-road-to-boruto) | 0 | 0 | 3 | 0 | 0 | `game` |
 | [NARUTO SHIPPUDEN™: Ultimate Ninja® STORM 3 Full Burst](#naruto-shippuden-ultimate-ninja-storm-3-full-burst) | 0 | 0 | 0 | 1 | 0 | `game` |
 | [NARUTO X BORUTO Ultimate Ninja STORM CONNECTIONS](#naruto-x-boruto-ultimate-ninja-storm-connections) | 0 | 0 | 6 | 0 | 0 | `game` |
 | [Need For Speed™ Hot Pursuit Remastered](#need-for-speed-hot-pursuit-remastered) | 1 | 0 | 0 | 0 | 5 | `build` → `game`, `build` → `engine` |
@@ -433,6 +434,14 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 
 - **16.0.2 `main`** `c9a3dd77…`
   - host [hle_fpslock.c:35](../../dm/host/hle_fpslock.c#L35): engine frame limit set to fps_target: RE Engine frame limit
+
+### NARUTO SHIPPUDEN: ULTIMATE NINJA STORM 4 ROAD TO BORUTO
+
+[NARUTO SHIPPUDEN: ULTIMATE NINJA STORM 4 ROAD TO BORUTO](../../dm/games/01003F800CF5C000/README.md), `01003F800CF5C000`, [patches.py](../../dm/games/01003F800CF5C000/patches.py).
+
+- **`game`**, frame rate, at goal, checked: Display setup, rate setter, Scaleform advance and pad snapshot share fingerprints in 1.0.0 and 1.1.0: Storm 4 60 fps display cadence and Scaleform input. Storm 4 uses the native rate to convert game content durations and its 30 fps movies poll the game pad state. The host already honors a one-refresh present interval.
+
+- **function-matched stub** (`main` of builds without STUBS): Storm 4 60 fps display cadence and Scaleform input: a function of 0x2ac bytes, `+0x20c` in it
 
 ### NARUTO SHIPPUDEN™: Ultimate Ninja® STORM 3 Full Burst
 

@@ -23,7 +23,8 @@ int main(void) {
             !memchr(key.vs, 0, sizeof key.vs) || !memchr(key.fs, 0, sizeof key.fs) ||
             !library_name(key.vs, line[0] == 'R' && key.vs_stage == 0) ||
             (key.fs[0] && !library_name(key.fs, 0)) ||
-            key.k.vs || key.k.fs || key.k.fsfn) {
+            key.k.vs || key.k.fs || key.k.fsfn ||
+            !pso_formats_valid(key.k.cfmt, key.k.dfmt, key.k.sfmt)) {
             puts("-");
             continue;
         }
