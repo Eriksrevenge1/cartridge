@@ -102,7 +102,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [DARK SOULS: REMASTERED](01004AB00A260000/README.md) | `01004AB00A260000` | 1.0.3 | 4.5.0 | FromSoftware's engine | NVN | [60 fps mode](01004AB00A260000/README.md#frame-rate) |
 | [DAVE THE DIVER](010097F018538000/README.md) | `010097F018538000` | 1.0.6.1267 | 20.5.29 | Unity 6000.0.52f1 IL2CPP, FMOD | NVN | — |
 | [Dead Cells](0100646009FBE000/README.md) | `0100646009FBE000` | 1.25.0 | 13.3.5 | Heaps / HashLink (HL/C) | NVN | — |
-| [Demon Slayer -Kimetsu no Yaiba- The Hinokami Chronicles 2](0100AD80208A8000/README.md) | `0100AD80208A8000` | 2.01 | 20.5.17 | Unreal Engine 5, CRIWARE | NVN | — |
+| [Demon Slayer -Kimetsu no Yaiba- The Hinokami Chronicles 2](0100AD80208A8000/README.md) | `0100AD80208A8000` | 2.01 | 20.5.17 | Unreal Engine 5, CRIWARE | NVN | [60 fps target](0100AD80208A8000/README.md#frame-rate) |
 | [Devil May Cry 3 Special Edition](01007B600D5BC000/README.md) | `01007B600D5BC000` | 1.0.1 | 8.2.0 | Capcom's DMC3 engine, FMOD | NVN | — |
 | [Diablo II: Resurrected](0100726014352000/README.md) | `0100726014352000` | 1.0.34.0 | 11.4.3 | Blizzard's D2R engine, FMOD | NVN | [60 fps mode](0100726014352000/README.md#what-it-needs) |
 | [Diablo III: Eternal Collection](01001B300B9BE000/README.md) | `01001B300B9BE000` | 2.7.7.92380 | 8.2.0 | Blizzard's engine, FMOD | NVN | — |
@@ -185,6 +185,7 @@ One row per profile; the notes are each profile's `README.md`. Entries marked pr
 | [Monster Train 2](010051701FB46000/README.md) | `010051701FB46000` | 1.1.1 | 18.3.5 | Unity 2022.3.54f1 IL2CPP | NVN | [60 fps mode](010051701FB46000/README.md#frame-rate) |
 | [Mortal Kombat 11](0100F2200C984000/README.md) | `0100F2200C984000` | 1.0.26 | 9.3.1 | NetherRealm's Unreal Engine 3, Wwise, Havok | NVN | — |
 | [NARUTO SHIPPUDEN: Ultimate Ninja STORM 3 Full Burst](01006BB00800A000/README.md) | `01006BB00800A000` | 1.0.1 | 4.4.0 | CyberConnect2, CRIWARE | NVN | [60 fps in Mac VS Battle](01006BB00800A000/README.md#frame-rate) |
+| [NARUTO SHIPPUDEN: ULTIMATE NINJA STORM 4 ROAD TO BORUTO](01003F800CF5C000/README.md) | `01003F800CF5C000` | 1.1.0 | 8.2.1 | CyberConnect2, CRIWARE | NVN + OpenGL ES | — |
 | [NARUTO X BORUTO Ultimate Ninja STORM CONNECTIONS](0100D2D0190A4000/README.md) | `0100D2D0190A4000` | 1.7.1 | 14.3.0 | CyberConnect2, CRIWARE | NVN + OpenGL ES | [60 fps target](0100D2D0190A4000/README.md#frame-rate) |
 | [Need for Speed: Hot Pursuit Remastered](010029B0118E8000/README.md) | `010029B0118E8000` | 1.0.3 | 10.4.1 | Criterion's engine (Stellar Entertainment port) | NVN | 60 fps target |
 | [NieR:Automata The End of YoRHa Edition](010056B015FE8000/README.md) | `010056B015FE8000` | 1.0.3 | 12.3.9 | PlatinumGames' engine | NVN | 60 fps target |
